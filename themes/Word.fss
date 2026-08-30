@@ -1,0 +1,201 @@
+/* FoxStyleSheet - Word (Professional Blue) */
+
+_res_ {
+    white                = rgb(255, 255, 255)
+    black                = rgb(0, 0, 0)
+    accent               = rgb(43, 87, 154)
+    accentDark           = rgb(25, 60, 120)
+    accentSoft           = rgb(227, 237, 250)
+    accentFocus          = rgb(210, 228, 252)
+    surface              = rgb(240, 243, 248)
+    surfaceAlt           = rgb(255, 255, 255)
+    textPrimary          = rgb(30, 30, 30)
+    textSecondary        = rgb(80, 85, 95)
+    textPlaceholder      = rgb(158, 158, 158)
+    border               = rgb(175, 180, 188)
+    borderFocus          = $accent
+    selection            = rgb(190, 210, 240)
+    selectionText        = $black
+    disabled             = rgb(242, 242, 242)
+    disabledText         = rgb(158, 158, 158)
+    disabledBorder       = rgb(220, 220, 220)
+    header               = $accent
+    headerText           = $white
+    font                 = "Segoe UI"
+}
+
+form {
+    backColor   = $surface
+    frameTheme  = "Word"
+}
+
+/* === Inputs === */
+EditBox, TextBox, Spinner {
+    backColor           = $surfaceAlt
+    foreColor           = $textPrimary
+    borderColor         = $border
+    borderStyle         = 1
+    selectedBackColor   = $selection
+    selectedForeColor   = $selectionText
+    disabledBackColor   = $disabled
+    disabledForeColor   = $disabledText
+    fontName            = $font
+    specialEffect       = 1
+}
+
+EditBox.onGotFocus, TextBox.onGotFocus, ComboBox.onGotFocus, Spinner.onGotFocus {
+    borderColor = $borderFocus
+    backColor   = $accentFocus
+    foreColor   = $textPrimary
+}
+
+EditBox.onLostFocus, TextBox.onLostFocus, ComboBox.onLostFocus, Spinner.onLostFocus {
+    borderColor         = $border
+    backColor           = $surfaceAlt
+    foreColor           = $textPrimary
+    selectedBackColor   = $selection
+    selectedForeColor   = $selectionText
+    fontName            = $font
+    disabledBackColor   = $disabled
+    disabledForeColor   = $disabledText
+}
+
+TextBox.onRightClick, EditBox.onRightClick {
+    editMenu = .t.
+}
+
+/* === ComboBox === */
+ComboBox {
+    borderColor             = $border
+    borderStyle             = 1
+    selectedBackColor       = $selection
+    selectedForeColor       = $selectionText
+    selectedItemBackColor   = $selection
+    selectedItemForeColor   = $selectionText
+    foreColor               = $textPrimary
+    fontName                = $font
+    backColor               = $surfaceAlt
+    itemForeColor           = $textPrimary
+    itemBackColor           = $surfaceAlt
+    specialEffect           = 1
+}
+
+/* === ListBox === */
+ListBox {
+    borderColor             = $border
+    borderStyle             = 1
+    selectedItemBackColor   = $selection
+    selectedItemForeColor   = $selectionText
+    fontName                = $font
+    itemForeColor           = $textPrimary
+    itemBackColor           = $surfaceAlt
+    specialEffect           = 1
+}
+
+/* === CheckBox === */
+CheckBox {
+    foreColor   = $textPrimary
+    fontName    = $font
+    backStyle   = 0
+}
+
+/* === CommandButton === */
+CommandButton {
+    foreColor       = $accent
+    fontName        = $font
+    specialEffect   = 1
+    themes          = .f.
+    backColor       = $accentSoft
+    borderColor     = $accent
+    mousePointer    = 15
+}
+
+CommandButton.onMouseEnter {
+    backColor   = $accent
+    foreColor   = $white
+    borderColor = $accentDark
+}
+
+CommandButton.onMouseLeave {
+    backColor   = $accentSoft
+    foreColor   = $accent
+    borderColor = $accent
+}
+
+/* === Label === */
+Label {
+    foreColor   = $textSecondary
+    fontName    = $font
+    backStyle   = 0
+}
+
+/* === OptionGroup === */
+OptionGroup {
+    borderStyle     = 0
+    themes          = .f.
+    backStyle       = 0
+    specialEffect   = 1
+}
+
+/* === OptionButton === */
+OptionButton {
+    foreColor   = $textPrimary
+    fontName    = $font
+    backStyle   = 0
+}
+
+/* === Container === */
+Container {
+    backColor   = $surfaceAlt
+    borderColor = $border
+    specialEffect = 1
+}
+
+/* === Shape === */
+Shape {
+    backColor       = $accentSoft
+    borderColor     = $accent
+    specialEffect   = 1
+}
+
+/* === PageFrame === */
+pageFrame {
+    themes  = .f.
+    tabs    = .f.
+}
+
+page {
+    foreColor   = $accent
+    backColor   = $surfaceAlt
+    fontName    = $font
+}
+
+pageFrame {
+    tabs = .t.
+}
+
+Page.onClick {
+    _           = this.parent.setAll('FontBold', .f., 'Page')
+    foreColor   = $accentDark
+    fontBold    = .t.
+}
+
+/* === Grid === */
+Header {
+    backColor   = $header
+    foreColor   = $headerText
+    fontName    = $font
+    fontBold    = .t.
+}
+
+Grid {
+    deleteMark          = .f.
+    fontName            = $font
+    headerHeight        = 28
+    highLightStyle      = 2
+    highLightBackColor  = $selection
+    highLightForeColor  = $selectionText
+    recordMark          = .f.
+    themes              = .f.
+    gridLineColor       = $border
+}

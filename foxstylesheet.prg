@@ -1,0 +1,1465 @@
+#define LOG_ERROR      16
+#define LOG_INFO       64
+#define LOG_WARNING    48
+#define LOG_DEBUG      80
+#define CRLF           chr(13) + chr(10)
+#define FSS_SEPARATOR  ' _fss_lf '
+#define FSS_KEY        '_'
+#define FSS_VERSION    '2.0.0'
+
+* Entry point: DO foxstylesheet.prg WITH "theme.fss", ThisForm
+lparameters tcStyle, toThisform
+
+local lcPropName
+lcPropName = sys(2015)
+=addproperty(toThisform, lcPropName, createobject("FoxStyleSheet"))
+toThisform. &lcPropName..link(tcStyle, toThisform)
+return
+
+*==============================================================
+* CLASS: FoxStyleSheet
+* Main engine. Zero mandatory external dependencies.
+* Optional features:
+*   - Page backgrounds (rgb): requires System.app beside the PRG
+*   - Custom title bar (frametheme): requires Codejock OCX + resources.dbf
+*==============================================================
+define class FoxStyleSheet as custom
+
+    cVersion = FSS_VERSION
+
+    * cPrgPath: folder where foxstylesheet.prg lives (auto-set in init)
+    * cPath:    APPDATA temp folder for logs and generated images
+    cPrgPath = ''
+    cPath    = ''
+
+    cSystemAppPath = ''
+
+    protected oLogger, oResources, oResourcesIndex, oRegExp, oRegexPatterns
+    protected oFunctions, oThisform, oImages, oControls, oMetrics
+
+    procedure init
+        local lcPrgFile, lcPrgPath, lcPath
+
+        * Capture PRG's own directory for auto-locating System.app / resources.dbf
+        lcPrgFile = sys(16)
+        if !empty(lcPrgFile)
+            lcPrgPath = addbs(justpath(lcPrgFile))
+            this.cPrgPath = lcPrgPath
+        endif
+
+        with this
+            .oLogger         = createobject("FssLogger")
+            .oLogger.lDebugMode = .f.
+            .oResources      = createobject("Collection")
+            .oResourcesIndex = createobject("Collection")
+            .oFunctions      = createobject("Collection")
+            .oControls       = createobject("Collection")
+            .oImages         = createobject("Collection")
+            .oMetrics        = createobject("FssStyleMetrics")
+            .oRegExp         = createobject("VBScript.RegExp")
+            .oRegExp.global      = .t.
+            .oRegExp.IgnoreCase  = .t.
+            .cSystemAppPath  = ''
+        endwith
+
+        this.InitRegexPatterns()
+
+        * APPDATA folder for temp images and log file
+        lcPath = addbs(addbs(getenv("APPDATA")) + 'FoxStyleSheet')
+        this.cPath = lcPath
+        if !directory(lcPath)
+            mkdir '&lcPath'
+        endif
+
+        * Auto-locate System.app: PRG folder first, then APPDATA cache
+        this.cSystemAppPath = this.FindSystemApp()
+    endproc
+
+    *----------------------------------------------------------
+    * Feature detection (public)
+    *----------------------------------------------------------
+
+    * Returns .T. if Page background images (rgb()) are available
+    function IsDrawingAvailable()
+        return !empty(this.cSystemAppPath) and file(this.cSystemAppPath)
+    endfunc
+
+    * Returns .T. if Codejock SkinFramework is registered on this machine
+    function IsCodejockAvailable()
+        local loHelper, llResult
+        llResult = .f.
+        try
+            loHelper = createobject("FssOCXHelper")
+            llResult = loHelper.isClassRegistered("Codejock.SkinFramework.22.1.0")
+        catch
+            llResult = .f.
+        endtry
+        return llResult
+    endfunc
+
+    * Returns performance report string from last link() call
+    function GetPerformanceReport()
+        return this.oMetrics.GetReport()
+    endfunc
+
+    *----------------------------------------------------------
+    * Main entry point
+    *----------------------------------------------------------
+    procedure link(tcFile, toForm)
+        this.oMetrics.Reset()
+        this.oMetrics.StartTimer()
+        this.oThisform = toForm
+
+        this.oLogger.SetLogFile(this.cPath + 'FoxStyleSheet.log')
+
+        local lcContent, loStyles
+        lcContent = this.LoadContent(tcFile)
+        lcContent = this.RemoveComments(lcContent)
+
+        this.ExtractFunctions(lcContent)
+
+        loStyles = this.ParseStyles(lcContent)
+        this.oMetrics.EndTimer('parse')
+
+        this.oMetrics.StartTimer()
+        this.ApplyAllStyles(loStyles, toForm)
+        this.oMetrics.EndTimer('apply')
+
+        this.BindFormEvents()
+    endproc
+
+    *----------------------------------------------------------
+    * Lifecycle
+    *----------------------------------------------------------
+    procedure destroy
+        this.UnbindAllEvents()
+        try
+            unbindevents(this)
+        catch
+        endtry
+        this.CleanupTempFiles()
+        this.CleanupScreenObjects()
+        this.oControls       = .null.
+        this.oResourcesIndex = .null.
+    endproc
+
+    protected procedure UnbindAllEvents
+        local lcControl, loControl
+        for each lcControl in this.oControls
+            try
+                loControl = this.GetCachedControl(lcControl)
+                if type('loControl') == 'O' and !isnull(loControl)
+                    unbindevents(loControl)
+                endif
+            catch
+            endtry
+        endfor
+        if type('this.oThisform') == 'O' and !isnull(this.oThisform)
+            unbindevents(this.oThisform)
+        endif
+    endproc
+
+    protected procedure CleanupTempFiles
+        local lcImage
+        try
+            for each lcImage in this.oImages
+                if file(lcImage)
+                    delete file (lcImage)
+                endif
+            endfor
+        catch to loEx
+            this.oLogger.LogFromException(loEx)
+        endtry
+        try
+            local array laFiles[1]
+            local i, lcFile
+            if adir(laFiles, this.cPath + '*.png') > 0
+                for i = 1 to alen(laFiles, 1)
+                    try
+                        lcFile = this.cPath + laFiles[i, 1]
+                        if file(lcFile)
+                            delete file (lcFile)
+                        endif
+                    catch
+                    endtry
+                endfor
+            endif
+        catch to loEx
+            this.oLogger.LogFromException(loEx)
+        endtry
+    endproc
+
+    protected procedure CleanupScreenObjects
+        try
+            if type('_screen.oFssTitleBar') == 'O'
+                _screen.oFssTitleBar = .null.
+                removeproperty(_screen, 'oFssTitleBar')
+            endif
+        catch
+        endtry
+    endproc
+
+    *----------------------------------------------------------
+    * Parsing pipeline
+    *----------------------------------------------------------
+    protected procedure InitRegexPatterns
+        this.oRegexPatterns = createobject("Collection")
+        this.oRegexPatterns.add('\/\*[\s\S]*?\*\/', 'comments')
+        this.oRegexPatterns.add("[\*\._a-z0-9]*(?:,\s[\*\._a-z0-9]*)*[,\s]*\s+\{[\s\S]*?\}", 'selectors')
+        this.oRegexPatterns.add('function\s+\w+\s+\{[\S\s]*?\}', 'functions')
+        this.oRegexPatterns.add("\$\w+", 'variables')
+        this.oRegexPatterns.add('thisform', 'thisform')
+    endproc
+
+    protected function GetRegexPattern(tcKey)
+        local llOk
+        llOk = .t.
+        try
+            this.oRegExp.pattern = this.oRegexPatterns.item(tcKey)
+        catch
+            this.oLogger.LogWarning("Regex pattern not found: " + tcKey)
+            llOk = .f.
+        endtry
+        return llOk
+    endfunc
+
+    protected function LoadContent(tcFile)
+        if file(tcFile)
+            return filetostr(tcFile)
+        else
+            return tcFile
+        endif
+    endfunc
+
+    protected function RemoveComments(tcContent)
+        this.GetRegexPattern('comments')
+        return this.oRegExp.replace(tcContent, '')
+    endfunc
+
+    protected function ParseStyles(tcContent)
+        this.GetRegexPattern('selectors')
+        local loCollectionMatch, loSubMatch, loStyles, loResult
+        loCollectionMatch = this.oRegExp.Execute(tcContent)
+        loStyles = createobject("Collection")
+
+        for each loSubMatch in loCollectionMatch
+            loResult = this.ExtractStyles(loSubMatch)
+            if !isnull(loResult)
+                loStyles.add(loResult)
+                this.oMetrics.nStylesApplied = this.oMetrics.nStylesApplied + 1
+            endif
+        endfor
+
+        return loStyles
+    endfunc
+
+    protected function ExtractStyles(toSubMatch)
+        local lcStyles, lcSelectorArea, loSelectorCollection, loSelector
+        loSelectorCollection = createobject("Collection")
+        lcStyles       = alltrim(toSubMatch.value)
+        lcSelectorArea = alltrim(strextract('[' + lcStyles, '[', '{', 1))
+        lcStyles       = alltrim(strextract(lcStyles, '{', '}'))
+
+        if at(',', lcSelectorArea) > 0
+            local i
+            for i = 1 to getwordcount(lcSelectorArea, ',')
+                loSelector = this.parseSelector(alltrim(getwordnum(lcSelectorArea, i, ',')), lcStyles)
+                loSelectorCollection.add(loSelector)
+            endfor
+        else
+            if lower(lcSelectorArea) == '_res_'
+                if empty(lcStyles)
+                    return .null.
+                endif
+                this.loadResourcesOptimized(lcStyles)
+                return .null.
+            endif
+            loSelector = this.parseSelector(lcSelectorArea, lcStyles)
+            loSelectorCollection.add(loSelector)
+        endif
+
+        return loSelectorCollection
+    endfunc
+
+    protected procedure loadResourcesOptimized(tcStyles)
+        local i, lcProp, lcValue, lcResolved, lnPasses, laKeys[1], lnCount
+        local loNewResources, loNewIndex
+        this.oResources      = createobject("Collection")
+        this.oResourcesIndex = createobject("Collection")
+
+        local array laProp[1]
+        =alines(laProp, tcStyles, 5)
+        
+        this.oLogger.LogInfo("loadResourcesOptimized: " + transform(alen(laProp)) + " lineas")
+        
+        * Primera pasada: cargar todas las variables sin resolver
+        for i = 1 to alen(laProp)
+            lcProp  = lower(alltrim(chrtran(getwordnum(laProp[i], 1, '='), chr(9), ' ')))
+            lcValue = alltrim(chrtran(getwordnum(laProp[i], 2, '='), chr(9), ' '))
+            if empty(lcProp)
+                loop
+            endif
+            try
+                this.oResources.add(lcValue, lcProp)
+                this.oResourcesIndex.add(this.oResources.count, lcProp)
+                this.oLogger.LogInfo("Resource cargada: " + lcProp + " = " + lcValue)
+            catch to loEx
+                this.oLogger.LogFromException(loEx)
+            endtry
+        endfor
+        
+        * Segunda pasada: resolver referencias cruzadas (max 5 niveles)
+        for lnPasses = 1 to 5
+            lnCount = this.oResources.count
+            dimension laKeys[lnCount]
+            for i = 1 to lnCount
+                laKeys[i] = this.oResources.getkey(i)
+            endfor
+            
+            loNewResources = createobject("Collection")
+            loNewIndex = createobject("Collection")
+            
+            for i = 1 to lnCount
+                lcProp = laKeys[i]
+                lcValue = this.oResources.item(lcProp)
+                if '$' $ lcValue
+                    lcResolved = this.EvalExpressionOptimized(lcValue, .t.)
+                    this.oLogger.LogInfo("Resource resuelta pasada " + transform(lnPasses) + ": " + lcProp + " = " + lcResolved)
+                else
+                    lcResolved = lcValue
+                endif
+                loNewResources.add(lcResolved, lcProp)
+                loNewIndex.add(loNewResources.count, lcProp)
+            endfor
+            
+            this.oResources = loNewResources
+            this.oResourcesIndex = loNewIndex
+        endfor
+    endproc
+
+    protected function GetResourceOptimized(tcKey)
+        local lnIndex, lcResult
+        lcResult = ''
+        try
+            lnIndex  = this.oResourcesIndex.item(lower(tcKey))
+            lcResult = this.oResources.item(lnIndex)
+        catch
+            lcResult = ''
+        endtry
+        return lcResult
+    endfunc
+
+    protected procedure ApplyAllStyles(toStyles, toForm)
+        local loStyle, loSelector
+        for each loStyle in toStyles
+            for each loSelector in loStyle
+                if !empty(loSelector.ControlStyles)
+                    this.ApplyStyles(loSelector, toForm)
+                endif
+            endfor
+        endfor
+    endproc
+
+    protected procedure ApplyStyles(toSelector, toForm)
+        local loStyles, lcClassProp, loClassCollection, lcClassStylesProp, loControl
+        loStyles = this.loadStyles(toSelector.ControlStyles)
+
+        if !empty(toSelector.ControlEvent)
+            loClassCollection = createobject("Collection")
+            lcClassStylesProp = ''
+
+            do case
+            case toSelector.ControlType == "class"
+                lcClassProp       = toSelector.ControlName + 'ClassCollection'
+                lcClassStylesProp = textmerge('o<<toSelector.ControlName>>Class<<toSelector.ControlEvent>>Styles')
+                if !pemstatus(toForm, lcClassProp, 5)
+                    this.getControlsByClass(toForm, lower(toSelector.ControlName), loClassCollection)
+                    =addproperty(toForm, lcClassProp, loClassCollection)
+                else
+                    loClassCollection = evaluate('toForm.' + lcClassProp)
+                endif
+                this.bindControlStyles(lcClassStylesProp, loClassCollection, toSelector.ControlEvent, loStyles)
+            case toSelector.ControlType == "name"
+                loClassCollection.add('this.oThisform.' + toSelector.ControlName)
+                this.bindControlStyles(lcClassStylesProp, loClassCollection, toSelector.ControlEvent, loStyles)
+            case toSelector.ControlType == '*'
+                lcClassProp       = 'StarClassCollection'
+                lcClassStylesProp = textmerge('oStarClass<<toSelector.ControlEvent>>Styles')
+                if !pemstatus(toForm, lcClassProp, 5)
+                    this.getAllControls(toForm, loClassCollection)
+                    =addproperty(toForm, lcClassProp, loClassCollection)
+                else
+                    loClassCollection = evaluate('toForm.' + lcClassProp)
+                endif
+                this.bindControlStyles(lcClassStylesProp, loClassCollection, toSelector.ControlEvent, loStyles)
+            endcase
+        else
+            do case
+            case toSelector.ControlType == "class"
+                if toSelector.ControlName == "form"
+                    this.applyStylesByControl(toForm, loStyles)
+                else
+                    this.applyStylesByClass(toForm, loStyles, toSelector.ControlName)
+                endif
+            case toSelector.ControlType == '*'
+                this.applyStylesByClass(toForm, loStyles, .f.)
+            case toSelector.ControlType == "name"
+                try
+                    loControl = evaluate("toForm." + toSelector.ControlName)
+                    this.applyStylesByControl(loControl, loStyles)
+                    this.oMetrics.nControlsProcessed = this.oMetrics.nControlsProcessed + 1
+                catch to loEx
+                    this.oLogger.LogFromException(loEx)
+                endtry
+            endcase
+        endif
+    endproc
+
+    protected procedure applyStylesByControl(toControl, toStyles)
+        local i, lcProp, lcValue, lcCleanProp, lcColorValues, lcImage
+        local lnRed, lnGreen, lnBlue, lnW, lnH
+        local laExec[1], lcExec, lnExec
+
+        this.oLogger.LogDebug("Styling: " + toControl.Name + " (" + toControl.BaseClass + ")")
+
+        for i = 1 to toStyles.count
+            lcProp      = toStyles.getkey(i)
+            lcValue     = toStyles.item(i)
+            lcCleanProp = alltrim(strtran(lcProp, chr(9), ''))
+
+            do case
+            case lcCleanProp == FSS_KEY
+                if left(lcValue, 1) != '$'
+                    alines(laExec, lcValue, 5, FSS_SEPARATOR)
+                    for lnExec = 1 to alen(laExec, 1)
+                        lcExec = this.EvalExpressionOptimized(laExec[lnExec], .t.)
+                        lcExec = strtran(lcExec, 'this', 'toControl')
+                        &lcExec
+                    endfor
+                endif
+                loop
+
+            case lower(lcCleanProp) == 'frametheme' and lower(toControl.baseclass) == 'form'
+                this.addTitleBar(toControl, this.EvalExpressionOptimized(lcValue))
+                loop
+
+            case lower(lcCleanProp) == 'picture' and lower(toControl.baseclass) == 'page'
+                if 'rgb(' $ lower(lcValue)
+                    lcColorValues = strextract(lcValue, 'rgb(', ')', 1)
+                else
+                    lcColorValues = strextract(lcValue, '(', ')', 1)
+                endif
+                if empty(lcColorValues)
+                    this.oLogger.LogWarning("Could not extract RGB from: " + lcValue)
+                    loop
+                endif
+                lnRed   = val(alltrim(getwordnum(lcColorValues, 1, ',')))
+                lnGreen = val(alltrim(getwordnum(lcColorValues, 2, ',')))
+                lnBlue  = val(alltrim(getwordnum(lcColorValues, 3, ',')))
+                lnW = toControl.parent.width
+                lnH = toControl.parent.height
+                if lnW > 0 and lnH > 0
+                    lcImage = this.cPath + sys(2015) + '.png'
+                    if this.DrawImage(lcImage, lnW, lnH, lnRed, lnGreen, lnBlue)
+                        try
+                            toControl.picture = lcImage
+                        catch to loEx
+                            this.oLogger.LogFromException(loEx)
+                        endtry
+                    endif
+                endif
+                loop
+
+            otherwise
+                if !this.ValidateStyleProperty(lcCleanProp, lcValue, toControl)
+                    loop
+                endif
+                try
+                    if lower(toControl.baseclass) == "olecontrol"
+                        toControl.Object. &lcCleanProp = this.EvalExpressionOptimized(lcValue)
+                    else
+                        toControl. &lcCleanProp = this.EvalExpressionOptimized(lcValue)
+                    endif
+                catch to loEx
+                    this.oLogger.LogFromException(loEx)
+                endtry
+            endcase
+        endfor
+    endproc
+
+    protected function ValidateStyleProperty(tcProp, tcValue, toControl)
+        local llValid, lvEval
+        llValid = .t.
+
+        do case
+        case lower(tcProp) == 'backcolor' or lower(tcProp) == 'forecolor'
+            llValid = this.IsValidColor(tcValue)
+        case lower(tcProp) == 'fontsize'
+            lvEval  = this.EvalExpressionOptimized(tcValue)
+            llValid = type('lvEval') == 'N' and lvEval > 0
+        case lower(tcProp) == 'visible' or lower(tcProp) == 'enabled'
+            llValid = this.IsValidBoolean(tcValue)
+        case !pemstatus(toControl, tcProp, 5)
+            if lower(toControl.baseclass) == "olecontrol"
+                llValid = .t.
+            else
+                llValid = .f.
+                this.oLogger.LogWarning("Property '" + tcProp + "' not found on " + toControl.Name)
+            endif
+        endcase
+
+        if !llValid and lower(tcProp) != FSS_KEY
+            this.oLogger.LogWarning("Invalid value '" + tcValue + "' for '" + tcProp + "'")
+        endif
+
+        return llValid
+    endfunc
+
+    protected function IsValidColor(tcValue)
+        local lvEval
+        lvEval = this.EvalExpressionOptimized(tcValue)
+        return type('lvEval') == 'N' and lvEval >= 0 and lvEval <= 16777215
+    endfunc
+
+    protected function IsValidBoolean(tcValue)
+        local lvEval, lcUpper
+        lvEval = this.EvalExpressionOptimized(tcValue)
+        if vartype(lvEval) == 'L'
+            return .t.
+        endif
+        lcUpper = upper(alltrim(transform(lvEval)))
+        return inlist(lcUpper, '.T.', '.F.', 'TRUE', 'FALSE', '1', '0')
+    endfunc
+
+    protected procedure applyStylesByClass(toForm, toStyles, tcClass)
+        local i, lcProp, lcValue
+
+        if vartype(tcClass) == 'C' and !empty(tcClass)
+            this.applyStylesToMatching(toForm, toStyles, lower(tcClass))
+            return
+        endif
+
+        for i = 1 to toStyles.count
+            lcProp  = toStyles.getkey(i)
+            lcValue = toStyles.item(i)
+            if lcProp == FSS_KEY
+                loop
+            endif
+            try
+                toForm.setall(lcProp, this.EvalExpressionOptimized(lcValue))
+            catch to loEx
+                this.oLogger.LogFromException(loEx)
+            endtry
+        endfor
+    endproc
+
+    protected procedure applyStylesToMatching(toContainer, toStyles, tcClass)
+        local loControl
+        if type('toContainer') != 'O' or isnull(toContainer)
+            return
+        endif
+        if !pemstatus(toContainer, "Objects", 5)
+            return
+        endif
+        for each loControl in toContainer.Objects
+            try
+                if type('loControl') == 'O' and !isnull(loControl)
+                    if lower(loControl.baseclass) == lower(tcClass) or lower(loControl.class) == lower(tcClass)
+                        this.applyStylesByControl(loControl, toStyles)
+                        this.oMetrics.nControlsProcessed = this.oMetrics.nControlsProcessed + 1
+                    endif
+                    this.applyStylesToMatching(loControl, toStyles, tcClass)
+                endif
+            catch to loEx
+                this.oLogger.LogFromException(loEx)
+            endtry
+        endfor
+    endproc
+
+    *----------------------------------------------------------
+    * Selector parsing
+    *----------------------------------------------------------
+    protected function parseSelector(tcSelectorArea, tcStyles)
+        local loSelector
+        loSelector = this.CreateEmptySelector(tcStyles)
+        do case
+        case left(tcSelectorArea, 1) == '.'
+            this.ParseNameSelector(loSelector, tcSelectorArea)
+        case left(tcSelectorArea, 1) == '*'
+            this.ParseUniversalSelector(loSelector)
+        otherwise
+            this.ParseClassSelector(loSelector, tcSelectorArea)
+        endcase
+        return loSelector
+    endfunc
+
+    protected function CreateEmptySelector(tcStyles)
+        local loSelector
+        loSelector = createobject("Empty")
+        =addproperty(loSelector, "ControlName",   "")
+        =addproperty(loSelector, "ControlType",   "")
+        =addproperty(loSelector, "ControlEvent",  "")
+        =addproperty(loSelector, "ControlStyles", tcStyles)
+        return loSelector
+    endfunc
+
+    protected procedure ParseNameSelector(loSelector, tcSelectorArea)
+        local lcArea, lcControlName, lcNameOrEvent, lnAt, i
+        lcArea        = alltrim(substr(tcSelectorArea, 2))
+        lcControlName = lcArea
+        loSelector.ControlType = "name"
+
+        lnAt = getwordcount(lcArea, '.')
+        if lnAt >= 1
+            lcNameOrEvent = alltrim(getwordnum(lcArea, lnAt, '.'))
+            if lower(left(lcNameOrEvent, 2)) == 'on'
+                loSelector.ControlEvent = substr(lcNameOrEvent, 3)
+                lcControlName = ''
+                for i = 1 to lnAt - 1
+                    if !empty(lcControlName)
+                        lcControlName = lcControlName + '.'
+                    endif
+                    lcControlName = lcControlName + alltrim(getwordnum(lcArea, i, '.'))
+                endfor
+            endif
+        endif
+        loSelector.ControlName = lcControlName
+    endproc
+
+    protected procedure ParseUniversalSelector(loSelector)
+        loSelector.ControlName = "*"
+        loSelector.ControlType = "*"
+    endproc
+
+    protected procedure ParseClassSelector(loSelector, tcSelectorArea)
+        loSelector.ControlName = lower(alltrim(tcSelectorArea))
+        loSelector.ControlType = "class"
+        if occurs('.', tcSelectorArea) = 1
+            loSelector.ControlName  = lower(alltrim(getwordnum(tcSelectorArea, 1, '.')))
+            loSelector.ControlEvent = substr(alltrim(getwordnum(tcSelectorArea, 2, '.')), 3)
+        endif
+    endproc
+
+    protected function loadStyles(tcStyles)
+        local loStyles, i, j, lcLine, lcProp, lcValue, lcOldVal
+        loStyles = createobject("Collection")
+        this.oLogger.LogDebug("loadStyles input: " + tcStyles)
+
+        try
+            local array laProp[1]
+            =alines(laProp, tcStyles, 5)
+            for i = 1 to alen(laProp)
+                lcLine = alltrim(strtran(laProp[i], chr(9), ' '))
+                if empty(lcLine) or !('=' $ lcLine)
+                    loop
+                endif
+                lcProp  = alltrim(substr(lcLine, 1, at('=', lcLine) - 1))
+                lcValue = alltrim(substr(lcLine, at('=', lcLine) + 1))
+                try
+                    j = loStyles.getkey(lcProp)
+                    if j > 0
+                        lcOldVal = loStyles.item(j)
+                        lcValue  = lcOldVal + FSS_SEPARATOR + lcValue
+                        loStyles.remove(j)
+                    endif
+                    loStyles.add(lcValue, lcProp)
+                catch to loEx
+                    this.oLogger.LogFromException(loEx)
+                endtry
+            endfor
+        catch to loEx
+            this.oLogger.LogFromException(loEx)
+        endtry
+
+        return loStyles
+    endfunc
+
+    *----------------------------------------------------------
+    * Event binding
+    *----------------------------------------------------------
+    protected procedure BindFormEvents
+        bindevent(this.oThisform, 'Activate', this, 'onActivate')
+    endproc
+
+    protected procedure onActivate
+        try
+            local lcControl, loControl
+            if type('this.oControls') == 'O' and !isnull(this.oControls)
+                for each lcControl in this.oControls
+                    try
+                        loControl = this.GetCachedControl(lcControl)
+                        if type('loControl') == 'O' and !isnull(loControl)
+                            loControl.init()
+                        endif
+                    catch to loEx
+                        this.oLogger.LogFromException(loEx)
+                    endtry
+                endfor
+            endif
+            if type('this.oThisform') == 'O' and !isnull(this.oThisform)
+                unbindevents(this.oThisform, 'Activate', this, 'onActivate')
+            endif
+        catch to loEx
+            this.oLogger.LogFromException(loEx)
+        endtry
+    endproc
+
+    protected function GetCachedControl(tcControlPath)
+        local loControl
+        loControl = .null.
+        try
+            if type('this.oThisform') == 'O' and !isnull(this.oThisform)
+                loControl = evaluate(tcControlPath)
+            endif
+        catch
+            loControl = .null.
+        endtry
+        return loControl
+    endfunc
+
+    protected procedure getControlsByClass(toControl, tcClass, toControlList)
+        local loControl, lcControlPath
+        if type('toControl') != 'O' or isnull(toControl)
+            return
+        endif
+        if !pemstatus(toControl, "Objects", 5)
+            return
+        endif
+        try
+            for each loControl in toControl.Objects
+                if type('loControl') == 'O' and !isnull(loControl)
+                    if lower(loControl.baseclass) == lower(tcClass) or lower(loControl.class) == lower(tcClass)
+                        lcControlPath = sys(1272, loControl)
+                        lcControlPath = 'this.oThisform' + substr(lcControlPath, at('.', lcControlPath))
+                        toControlList.add(lcControlPath)
+                    endif
+                    this.getControlsByClass(loControl, tcClass, toControlList)
+                endif
+            endfor
+        catch
+        endtry
+    endproc
+
+    protected procedure getAllControls(toControl, toControlList)
+        local loControl, lcControlPath
+        if type('toControl') != 'O' or isnull(toControl)
+            return
+        endif
+        if !pemstatus(toControl, "Objects", 5)
+            return
+        endif
+        try
+            for each loControl in toControl.Objects
+                if type('loControl') == 'O' and !isnull(loControl)
+                    lcControlPath = sys(1272, loControl)
+                    lcControlPath = 'this.oThisform' + substr(lcControlPath, at('.', lcControlPath))
+                    toControlList.add(lcControlPath)
+                    this.getAllControls(loControl, toControlList)
+                endif
+            endfor
+        catch
+        endtry
+    endproc
+
+    protected function bindControlStyles(tcClassStylesProp, toControls, tcEvent, toStyles)
+        local llOk
+        llOk = .t.
+        try
+            local lcControl, loControl, lcProp, lcKey, lvValue, y, loStyles2, lcPath2
+            lcProp = textmerge("o<<tcEvent>>Styles")
+            for each lcControl in toControls
+                loControl = this.GetCachedControl(lcControl)
+                if type('loControl') != 'O'
+                    loop
+                endif
+                if !empty(tcClassStylesProp)
+                    if type('this.oThisform') == 'O'
+                        if !pemstatus(this.oThisform, tcClassStylesProp, 5)
+                            =addproperty(this.oThisform, tcClassStylesProp, toStyles)
+                        else
+                            this.oThisform. &tcClassStylesProp = toStyles
+                        endif
+                    endif
+                else
+                    if !pemstatus(loControl, lcProp, 5)
+                        =addproperty(loControl, lcProp, .null.)
+                        loControl. &lcProp = toStyles
+                    else
+                        loStyles2 = evaluate("loControl." + lcProp)
+                        for y = 1 to toStyles.count
+                            lcKey   = toStyles.getkey(y)
+                            lvValue = toStyles.item(y)
+                            if !empty(loStyles2.getkey(lcKey))
+                                if lcKey == FSS_KEY and lvValue != loStyles2.item(lcKey)
+                                    local lcOldV
+                                    lcOldV  = loStyles2.item(lcKey)
+                                    lvValue = lcOldV + FSS_SEPARATOR + lvValue
+                                endif
+                                loStyles2.remove(y)
+                            endif
+                            loStyles2.add(lvValue, lcKey)
+                        endfor
+                    endif
+                endif
+                if inlist(pemstatus(loControl, tcEvent, 3), 'Event', 'Method')
+                    bindevent(loControl, tcEvent, this, "ControlBehavior")
+                    if lower(tcEvent) == 'init'
+                        lcPath2 = sys(1272, loControl)
+                        lcPath2 = 'this.oThisform' + substr(lcPath2, at('.', lcPath2))
+                        this.oControls.add(lcPath2)
+                    endif
+                endif
+            endfor
+        catch to loEx
+            this.oLogger.LogFromException(loEx)
+        endtry
+        return llOk
+    endfunc
+
+    protected function ControlBehavior(tv1, tv2, tv3, tv4, tv5)
+        try
+            local array arrEvents[1]
+            local array laStyles[2]
+            local loControl, i, j, loStyles, lcProp, lcValue, lcClassStylesProp
+            laStyles[1] = .null.
+            laStyles[2] = .null.
+
+            =aevents(arrEvents, 0)
+            if alen(arrEvents) = 0 or type('arrEvents[1]') != 'O'
+                return
+            endif
+
+            loControl = arrEvents[1]
+
+            if type('this.oThisform') != 'O' or isnull(this.oThisform)
+                return
+            endif
+
+            if alen(arrEvents, 1) >= 2 and type('loControl') == 'O'
+                * Universal star styles check first (lower priority)
+                lcClassStylesProp = textmerge('oStarClass<<arrEvents[2]>>Styles')
+                if pemstatus(this.oThisform, lcClassStylesProp, 5)
+                    laStyles[1] = evaluate("this.oThisform." + lcClassStylesProp)
+                endif
+                * Class-specific styles overwrite star (higher priority)
+                lcClassStylesProp = textmerge('o<<loControl.Class>>Class<<arrEvents[2]>>Styles')
+                if pemstatus(this.oThisform, lcClassStylesProp, 5)
+                    laStyles[1] = evaluate("this.oThisform." + lcClassStylesProp)
+                endif
+                lcProp = textmerge('o<<arrEvents[2]>>Styles')
+                if pemstatus(loControl, lcProp, 5)
+                    laStyles[2] = evaluate("loControl." + lcProp)
+                endif
+
+                for each loStyles in laStyles
+                    if !isnull(loStyles)
+                        for i = 1 to loStyles.count
+                            lcProp  = loStyles.getkey(i)
+                            lcValue = loStyles.item(i)
+                            try
+                                do case
+                                case lcProp == FSS_KEY
+                                    if left(lcValue, 1) != '$'
+                                        local array laLines[1]
+                                        local lcLine2
+                                        alines(laLines, lcValue, 5, FSS_SEPARATOR)
+                                        for j = 1 to alen(laLines, 1)
+                                            lcLine2 = this.EvalExpressionOptimized(laLines[j], .t.)
+                                            lcLine2 = strtran(lcLine2, 'this', 'loControl')
+                                            &lcLine2
+                                        endfor
+                                    else
+                                        local lcFuncBody, lcCtrlLoc, lcScript
+                                        lcFuncBody = this.oFunctions.item(lower(substr(lcValue, 2)))
+                                        lcFuncBody = strtran(lcFuncBody, 'this', 'loControl')
+                                        lcCtrlLoc  = sys(1272, loControl)
+                                        text to lcScript noshow textmerge
+                                            Local loControl
+                                            loControl = _screen.ActiveForm<<Substr(lcCtrlLoc, At('.',lcCtrlLoc))>>
+                                            If Type('loControl') != 'O'
+                                                Return
+                                            EndIf
+                                            <<lcFuncBody>>
+                                        ENDTEXT
+                                        execscript(lcScript)
+                                    endif
+                                case lower(alltrim(lcProp)) == 'editmenu'
+                                    local lbResp
+                                    lbResp = this.EvalExpressionOptimized(lcValue)
+                                    if type('lbResp') == 'L' and lbResp
+                                        this.popMenu()
+                                    endif
+                                otherwise
+                                    loControl. &lcProp = this.EvalExpressionOptimized(lcValue)
+                                endcase
+                            catch to loEx
+                                this.oLogger.LogFromException(loEx)
+                            endtry
+                        endfor
+                    endif
+                endfor
+            endif
+        catch to loEx
+            this.oLogger.LogFromException(loEx)
+        endtry
+    endfunc
+
+    protected function ExtractFunctions(tcContent)
+        local loMatchCollection, loSubMatch, loResult
+        this.GetRegexPattern('functions')
+        loMatchCollection = this.oRegExp.Execute(tcContent)
+        if type('loMatchCollection') != 'O'
+            return
+        endif
+        for each loSubMatch in loMatchCollection
+            loResult = this.parseFunction(loSubMatch.value)
+        endfor
+    endfunc
+
+    protected procedure parseFunction(tcFunction)
+        local lcFuncName, lcFuncBody
+        lcFuncName = lower(alltrim(strextract(tcFunction, 'function', '{', 1)))
+        lcFuncBody = alltrim(strextract(tcFunction, '{', '}', 1))
+        this.GetRegexPattern('thisform')
+        lcFuncBody = this.oRegExp.replace(lcFuncBody, '_screen.activeform')
+        this.oFunctions.add(lcFuncBody, lcFuncName)
+    endproc
+
+    *----------------------------------------------------------
+    * Variable / expression evaluation
+    *----------------------------------------------------------
+    protected function EvalExpressionOptimized(tcValue, tbJustExpand)
+        local loMatchCollection, lcValue, lcKey, lvResult, loSubMatch, lcResourceValue
+        this.GetRegexPattern('variables')
+        loMatchCollection = this.oRegExp.Execute(tcValue)
+        lcValue  = tcValue
+        lvResult = lcValue
+
+        if type('loMatchCollection') == 'O' and loMatchCollection.count > 0
+            for each loSubMatch in loMatchCollection
+                lcKey           = lower(alltrim(substr(loSubMatch.value, 2)))
+                lcResourceValue = this.GetResourceOptimized(lcKey)
+                if !empty(lcResourceValue)
+                    lcValue = strtran(lcValue, loSubMatch.value, lcResourceValue)
+                    if left(lcValue, 1) == '$'
+                        lcValue = this.EvalExpressionOptimized(lcValue, .t.)
+                    endif
+                endif
+            endfor
+            lvResult = lcValue
+        endif
+
+        try
+            if !tbJustExpand
+                lvResult = evaluate(lvResult)
+            endif
+        catch
+        endtry
+        return lvResult
+    endfunc
+
+    *----------------------------------------------------------
+    * DrawImage: Page background via System.Drawing
+    * Requires System.app beside foxstylesheet.prg
+    *----------------------------------------------------------
+    function DrawImage(tcOutput, tnWidth, tnHeight, tnRed, tnGreen, tnBlue)
+        local llResult, llDrawReady, lcSafAct
+        llResult = .f.
+
+        * Graceful skip — inform once per session via log
+        if !this.IsDrawingAvailable()
+            this.oLogger.LogInfo("DrawImage skipped: place System.app beside foxstylesheet.prg to enable Page backgrounds.")
+            return .f.
+        endif
+
+        if tnWidth <= 0 or tnHeight <= 0
+            this.oLogger.LogWarning("DrawImage: invalid dimensions.")
+            return .f.
+        endif
+        if tnRed < 0 or tnRed > 255 or tnGreen < 0 or tnGreen > 255 or tnBlue < 0 or tnBlue > 255
+            this.oLogger.LogWarning("DrawImage: RGB out of range.")
+            return .f.
+        endif
+
+        lcSafAct = set("Safety")
+        set safety off
+
+        llDrawReady = .f.
+        try
+            if type('_screen.system') != 'O'
+                do (this.cSystemAppPath)
+            endif
+            if type('_screen.system.Drawing') == 'O'
+                llDrawReady = .t.
+            else
+                this.oLogger.LogWarning("DrawImage: _screen.system.Drawing not available.")
+            endif
+        catch to loEx
+            this.oLogger.LogFromException(loEx)
+        endtry
+
+        if llDrawReady
+            try
+                local loBMP, loGFX, loBrush, loColor
+                with _screen.system.Drawing
+                    try
+                        loBMP    = .bitmap.New(tnWidth, tnHeight)
+                        loGFX    = .Graphics.FromImage(loBMP)
+                        loColor  = .color.FromRgb(tnRed, tnGreen, tnBlue)
+                        loBrush  = .SolidBrush.New(loColor)
+                        loGFX.clear(loColor)
+                        loGFX.FillRectangle(loBrush, 0, 0, tnWidth, tnHeight)
+                        loBrush.Dispose()
+                        loGFX.Dispose()
+
+                        if file(tcOutput)
+                            delete file (tcOutput)
+                        endif
+
+                        try
+                            loBMP.save(tcOutput, .Imaging.ImageFormat.Bmp)
+                            llResult = .t.
+                        catch
+                            try
+                                loBMP.save(tcOutput, .Imaging.ImageFormat.Png)
+                                llResult = .t.
+                            catch
+                            endtry
+                        endtry
+
+                        inkey(0.1)
+                        loBMP.Dispose()
+                    catch to loEx
+                        this.oLogger.LogFromException(loEx)
+                        try
+                            if type('loBrush') == 'O' and !isnull(loBrush)
+                                loBrush.Dispose()
+                            endif
+                        catch
+                        endtry
+                        try
+                            if type('loGFX') == 'O' and !isnull(loGFX)
+                                loGFX.Dispose()
+                            endif
+                        catch
+                        endtry
+                        try
+                            if type('loBMP') == 'O' and !isnull(loBMP)
+                                loBMP.Dispose()
+                            endif
+                        catch
+                        endtry
+                    endtry
+                endwith
+            catch to loEx
+                this.oLogger.LogFromException(loEx)
+            endtry
+        endif
+
+        set safety &lcSafAct
+
+        if llResult and file(tcOutput)
+            local array laFI[1]
+            if adir(laFI, tcOutput) > 0 and laFI[1, 2] > 0
+                this.oImages.add(tcOutput)
+            else
+                llResult = .f.
+            endif
+        endif
+
+        return llResult
+    endfunc
+
+    *----------------------------------------------------------
+    * Edit context menu
+    *----------------------------------------------------------
+    procedure popMenu
+        define popup EditMenu from mrow(), mcol() margin relative shadow color scheme 4 SHORTCUT
+        define bar _med_undo  of EditMenu prompt "\<Deshacer"         key CTRL+Z, "Ctrl+Z" PICTRES _med_undo  message "Deshace el ultimo comando"
+        define bar _med_redo  of EditMenu prompt "Re\<hacer"          key CTRL+R, "Ctrl+R" PICTRES _med_redo  message "Repite el ultimo comando"
+        define bar _med_sp100 of EditMenu prompt "\-"                 PICTRES _med_sp100
+        define bar _med_cut   of EditMenu prompt "Cor\<tar"           key CTRL+X, "Ctrl+X" PICTRES _med_cut   message "Elimina la seleccion y la coloca en el Portapapeles"
+        define bar _med_copy  of EditMenu prompt "\<Copiar"           key CTRL+C, "Ctrl+C" PICTRES _med_copy  message "Copia la seleccion en el portapapeles"
+        define bar _med_paste of EditMenu prompt "\<Pegar"            key CTRL+V, "Ctrl+V" PICTRES _med_paste message "Pega el contenido del Portapapeles"
+        define bar _med_pstlk of EditMenu prompt "Pegado \<Especial..."                    PICTRES _med_pstlk message "Pega como objeto vinculado o incrustado"
+        define bar _med_clear of EditMenu prompt "\<Limpiar"                               PICTRES _med_clear message "Elimina la seleccion sin copiarla"
+        define bar _med_sp200 of EditMenu prompt "\-"                 PICTRES _med_sp200
+        define bar _med_slcta of EditMenu prompt "Se\<leccionar Todo" key CTRL+A, "Ctrl+A" PICTRES _med_slcta message "Selecciona todo"
+        define bar _med_sp300 of EditMenu prompt "\-"                 PICTRES _med_sp300
+        activate popup EditMenu
+    endproc
+
+    *----------------------------------------------------------
+    * Codejock title bar (optional feature)
+    *----------------------------------------------------------
+    protected procedure addTitleBar(toThisform, tcColor)
+        local lcFssPath, lcSkinFile, lcOcxFile, lcSchema, llOk
+        lcFssPath = this.cPrgPath + 'Fss\'
+        lcSkinFile = lcFssPath + 'Windows10.cjstyles'
+        lcOcxFile  = lcFssPath + 'Codejock.SkinFramework.v22.1.0.ocx'
+
+        if !file(lcSkinFile)
+            this.oLogger.LogInfo("addTitleBar skipped: Windows10.cjstyles not found in Fss\ folder beside foxstylesheet.prg.")
+            return
+        endif
+
+        * Auto-register OCX if not yet installed (requires admin)
+        if !this.IsCodejockAvailable()
+            if file(lcOcxFile)
+                local loHelper
+                loHelper = createobject("FssOCXHelper")
+                loHelper.SetLogger(this.oLogger)
+                if !loHelper.registerClass(lcOcxFile, "Codejock.SkinFramework.22.1.0")
+                    this.oLogger.LogInfo("addTitleBar skipped: Codejock OCX found but registration failed (run as Administrator once).")
+                    return
+                endif
+            else
+                this.oLogger.LogInfo("addTitleBar skipped: Codejock SkinFramework not registered and OCX not found in Fss\ folder.")
+                return
+            endif
+        endif
+
+        llOk = .t.
+        try
+            lcSchema = this.getSchema(lower(tcColor))
+            if empty(lcSchema)
+                this.oLogger.LogWarning("addTitleBar: unknown theme '" + tcColor + "'")
+                llOk = .f.
+            endif
+        catch to loEx
+            this.oLogger.LogFromException(loEx)
+            llOk = .f.
+        endtry
+
+        if !llOk
+            return
+        endif
+
+        try
+            if type('_screen.oFssTitleBar') == 'O' and vartype(_screen.oFssTitleBar) != 'X'
+                _screen.oFssTitleBar.paintTitleBar(lcSkinFile, lcSchema, toThisform)
+            else
+                =addproperty(_screen, 'oFssTitleBar', createobject('FssCustomTitleBar'))
+                _screen.oFssTitleBar.paintTitleBar(lcSkinFile, lcSchema, toThisform)
+            endif
+        catch to loEx
+            this.oLogger.LogFromException(loEx)
+        endtry
+    endproc
+
+    protected function getSchema(tcColor)
+        local lcResult
+        do case
+        case tcColor == 'word'
+            lcResult = 'Normal Microsoft Office Word.ini'
+        case tcColor == 'excel'
+            lcResult = 'Normal Microsoft Office Excel.ini'
+        case tcColor == 'access'
+            lcResult = 'Normal Microsoft Office Access.ini'
+        case tcColor == 'powerpoint'
+            lcResult = 'Normal Microsoft Office Powerpoint.ini'
+        case tcColor == 'publisher'
+            lcResult = 'Normal Microsoft Office Publisher.ini'
+        case tcColor == 'onenote'
+            lcResult = 'Normal Microsoft Office OneNote.ini'
+        case tcColor == 'outlook'
+            lcResult = 'Normal Microsoft Office Outlook.ini'
+        case tcColor == 'red'
+            lcResult = 'NormalRed.ini'
+        case tcColor == 'gold'
+            lcResult = 'NormalGold.ini'
+        case tcColor == 'gray'
+            lcResult = 'NormalGray.ini'
+        case tcColor == 'black'
+            lcResult = 'NormalBlack.ini'
+        case tcColor == 'white'
+            lcResult = 'NormalWhite.ini'
+        otherwise
+            lcResult = ''
+        endcase
+        return lcResult
+    endfunc
+
+    protected function FindSystemApp()
+        local lcCandidate, lcResult
+        lcResult = ''
+        * 1) PRG's own folder
+        if !empty(this.cPrgPath)
+            lcCandidate = this.cPrgPath + 'System.app'
+            if file(lcCandidate)
+                lcResult = lcCandidate
+            endif
+        endif
+        * 2) APPDATA cache (extracted in a previous session)
+        if empty(lcResult)
+            lcCandidate = this.cPath + 'System.app'
+            if file(lcCandidate)
+                lcResult = lcCandidate
+            endif
+        endif
+        return lcResult
+    endfunc
+
+    *----------------------------------------------------------
+    * Logging facade (delegates to FssLogger)
+    *----------------------------------------------------------
+    procedure LogInfo(tcMessage)
+        if vartype(this.oLogger) == 'O'
+            this.oLogger.LogInfo(tcMessage)
+        endif
+    endproc
+
+    procedure LogWarning(tcMessage)
+        if vartype(this.oLogger) == 'O'
+            this.oLogger.LogWarning(tcMessage)
+        endif
+    endproc
+
+    procedure LogError(tcMessage)
+        if vartype(this.oLogger) == 'O'
+            this.oLogger.LogError(tcMessage)
+        endif
+    endproc
+
+    procedure LogDebug(tcMessage)
+        if vartype(this.oLogger) == 'O'
+            this.oLogger.LogDebug(tcMessage)
+        endif
+    endproc
+
+enddefine
+
+
+*==============================================================
+* CLASS: FssStyleMetrics
+* Performance counters for a single link() call.
+*==============================================================
+define class FssStyleMetrics as custom
+    nStylesApplied     = 0
+    nControlsProcessed = 0
+    nParseTime         = 0
+    nApplyTime         = 0
+    nStartTime         = 0
+
+    procedure Reset
+        this.nStylesApplied     = 0
+        this.nControlsProcessed = 0
+        this.nParseTime         = 0
+        this.nApplyTime         = 0
+        this.nStartTime         = 0
+    endproc
+
+    procedure StartTimer
+        this.nStartTime = seconds()
+    endproc
+
+    procedure EndTimer(tcOperation)
+        local lnElapsed
+        lnElapsed = seconds() - this.nStartTime
+        do case
+        case tcOperation == 'parse'
+            this.nParseTime = lnElapsed
+        case tcOperation == 'apply'
+            this.nApplyTime = lnElapsed
+        endcase
+    endproc
+
+    function GetReport()
+        local lcReport
+        lcReport = "FoxStyleSheet v" + FSS_VERSION + " - Performance" + CRLF + ;
+                   "  Styles   : " + transform(this.nStylesApplied)     + CRLF + ;
+                   "  Controls : " + transform(this.nControlsProcessed)  + CRLF + ;
+                   "  Parse    : " + transform(this.nParseTime)  + "s"  + CRLF + ;
+                   "  Apply    : " + transform(this.nApplyTime)  + "s"  + CRLF + ;
+                   "  Total    : " + transform(this.nParseTime + this.nApplyTime) + "s"
+        return lcReport
+    endfunc
+enddefine
+
+
+*==============================================================
+* CLASS: FssOCXHelper
+* COM registration helper for Codejock SkinFramework.
+*==============================================================
+define class FssOCXHelper as custom
+    protected oLogger
+
+    procedure SetLogger(toLogger)
+        this.oLogger = toLogger
+    endproc
+
+    function isClassRegistered(tcProgID)
+        local lbRegistered, nPos
+        declare integer RegOpenKey  in Win32API integer nHKey, string @cSubKey, integer @nResult
+        declare integer RegCloseKey in Win32API integer nHKey
+        nPos = 0
+        lbRegistered = RegOpenKey(-2147483648, tcProgID, @nPos) = 0
+        if lbRegistered
+            RegCloseKey(nPos)
+        endif
+        clear dlls RegOpenKey, RegCloseKey
+        return lbRegistered
+    endfunc
+
+    function registerClass(tcOCXFile, tcProgID)
+        if !this.isAdmin()
+            if vartype(this.oLogger) == 'O'
+                this.oLogger.LogError("Must run as Administrator to register Codejock OCX.")
+            endif
+            return .f.
+        endif
+        local lbOk, lnDeadline
+        lbOk = .f.
+        if this.RegOCX(tcOCXFile)
+            lnDeadline = seconds() + 10
+            lbOk = this.isClassRegistered(tcProgID)
+            do while !lbOk and seconds() < lnDeadline
+                lbOk = this.isClassRegistered(tcProgID)
+                if lbOk
+                    exit
+                endif
+            enddo
+        endif
+        return lbOk
+    endfunc
+
+    function RegOCX(tcOCXFile)
+        local lnErr
+        lnErr = 0
+        try
+            declare long DllRegisterServer in (tcOCXFile)
+        catch
+            lnErr = 1
+        endtry
+        if lnErr = 0
+            try
+                lnErr = DllRegisterServer()
+            catch
+                lnErr = 2
+            endtry
+        endif
+        clear dlls DllRegisterServer
+        return lnErr == 0
+    endfunc
+
+    function isAdmin()
+        local lnResult
+        declare integer IsUserAnAdmin in Shell32
+        try
+            lnResult = IsUserAnAdmin()
+        catch
+            lnResult = 1
+        endtry
+        clear dlls IsUserAnAdmin
+        return lnResult != 0
+    endfunc
+enddefine
+
+
+*==============================================================
+* CLASS: FssLogger
+* Structured logging: Info / Warning / Error / Debug levels.
+* lDebugMode = .F. by default; set .T. for verbose output.
+*==============================================================
+define class FssLogger as custom
+    protected cLogFile
+    lDebugMode = .f.
+
+    procedure SetLogFile(tcLogFile)
+        this.cLogFile = tcLogFile
+    endproc
+
+    procedure LogFromException(toEx as exception)
+        local lcMsg
+        lcMsg = "Error " + transform(toEx.ErrorNo) + ;
+                " line "  + transform(toEx.LineNo)  + ;
+                ": "      + toEx.Message            + ;
+                " in "    + toEx.Procedure
+        this.log(LOG_ERROR, lcMsg)
+    endproc
+
+    procedure LogInfo(tcMessage)
+        this.log(LOG_INFO, tcMessage)
+    endproc
+
+    procedure LogWarning(tcMessage)
+        this.log(LOG_WARNING, tcMessage)
+    endproc
+
+    procedure LogError(tcMessage)
+        this.log(LOG_ERROR, tcMessage)
+    endproc
+
+    procedure LogDebug(tcMessage)
+        if !this.lDebugMode
+            return
+        endif
+        this.log(LOG_DEBUG, tcMessage)
+    endproc
+
+    procedure log(tnType, tcMessage)
+        if empty(this.cLogFile)
+            this.cLogFile = fullpath('FoxStyleSheet.log')
+        endif
+        * Support legacy single-string call: log("message")
+        if type('tnType') == 'C'
+            tcMessage = tnType
+            tnType    = LOG_INFO
+        endif
+
+        local lcType, lcDateAct, lcCenturyAct, lnHour, lcLogText
+        lcDateAct    = set("Date")
+        lcCenturyAct = set("Century")
+        lnHour       = set("Hours")
+        set date italian
+        set century on
+        set hours to 24
+
+        do case
+        case tnType = LOG_ERROR
+            lcType = "ERROR  "
+        case tnType = LOG_INFO
+            lcType = "INFO   "
+        case tnType = LOG_WARNING
+            lcType = "WARNING"
+        case tnType = LOG_DEBUG
+            lcType = "DEBUG  "
+        otherwise
+            lcType = "INFO   "
+        endcase
+
+        try
+            lcLogText = ttoc(datetime()) + " | " + lcType + " | " + tcMessage + CRLF
+            =strtofile(lcLogText, this.cLogFile, 1)
+        catch
+        endtry
+
+        set century &lcCenturyAct
+        set date &lcDateAct
+        set hours to (lnHour)
+    endproc
+enddefine
+
+
+*==============================================================
+* CLASS: FssCustomTitleBar
+* Codejock SkinFramework integration. Only instantiated when
+* IsCodejockAvailable() returns .T.
+*==============================================================
+define class FssCustomTitleBar as custom
+    add object skinframework as olecontrol with ;
+        top      = 0, ;
+        left     = 0, ;
+        oleclass = "Codejock.SkinFramework.22.1.0", ;
+        height   = 26, ;
+        width    = 26, ;
+        name     = "skinframework"
+
+    procedure paintTitleBar(tcStyleFile, tcIniFile, toForm)
+        with this.skinframework
+            .loadSkin(tcStyleFile, tcIniFile)
+            .applyWindow(toForm.hwnd)
+            .ApplyOptions = 2
+        endwith
+    endproc
+enddefine
