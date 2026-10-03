@@ -40,7 +40,7 @@ define class FoxStyleSheet as custom
     oErrors    = .null.
     cLastError = ''
 
-    protected oLogger, oResources, oResourcesIndex, oRegExp, oRegexPatterns
+    protected oLogger, oResources, oResourcesIndex
     protected oFunctions, oThisform, oImages, oControls, oMetrics
 
     procedure init
@@ -67,13 +67,8 @@ define class FoxStyleSheet as custom
             .oControls       = createobject("Collection")
             .oImages         = createobject("Collection")
             .oMetrics        = createobject("FssStyleMetrics")
-            .oRegExp         = createobject("VBScript.RegExp")
-            .oRegExp.global      = .t.
-            .oRegExp.IgnoreCase  = .t.
             .cSystemAppPath  = ''
         endwith
-
-        this.InitRegexPatterns()
 
         * APPDATA folder for temp images and log file
         lcPath = addbs(addbs(getenv("APPDATA")) + 'FoxStyleSheet')
@@ -234,26 +229,8 @@ define class FoxStyleSheet as custom
     *----------------------------------------------------------
     * Parsing pipeline
     *----------------------------------------------------------
-    protected procedure InitRegexPatterns
-        this.oRegexPatterns = createobject("Collection")
-        this.oRegexPatterns.add('\/\*[\s\S]*?\*\/', 'comments')
-        this.oRegexPatterns.add("[\*\._a-z0-9]*(?:,\s[\*\._a-z0-9]*)*[,\s]*\s+\{[\s\S]*?\}", 'selectors')
-        this.oRegexPatterns.add('function\s+\w+\s+\{[\S\s]*?\}', 'functions')
-        this.oRegexPatterns.add("\$\w+", 'variables')
-        this.oRegexPatterns.add('thisform', 'thisform')
-    endproc
-
-    protected function GetRegexPattern(tcKey)
-        local llOk
-        llOk = .t.
-        try
-            this.oRegExp.pattern = this.oRegexPatterns.item(tcKey)
-        catch
-            this.oLogger.LogWarning("Regex pattern not found: " + tcKey)
-            llOk = .f.
-        endtry
-        return llOk
-    endfunc
+    *-- The theme is read by a small scanner written in VFP: no regular
+    *-- expressions, so no dependency on a COM component.
 
     *-- A theme is a file, or the text of a theme (it has a "{").
     protected function LoadContent(tcTheme)
@@ -270,53 +247,121 @@ define class FoxStyleSheet as custom
         return ''
     endfunc
 
+    *-- Removes every /* ... */ comment; one that is never closed runs to the end.
     protected function RemoveComments(tcContent)
-        this.GetRegexPattern('comments')
-        return this.oRegExp.replace(tcContent, '')
+        local lcOut, lcRest, lnOpen, lnClose
+        lcOut  = ''
+        lcRest = tcContent
+        lnOpen = at('/*', lcRest)
+        do while lnOpen > 0
+            lcOut   = lcOut + left(lcRest, lnOpen - 1)
+            lcRest  = substr(lcRest, lnOpen + 2)
+            lnClose = at('*/', lcRest)
+            if lnClose = 0
+                lcRest = ''
+            else
+                lcRest = substr(lcRest, lnClose + 2)
+            endif
+            lnOpen = at('/*', lcRest)
+        enddo
+        return lcOut + lcRest
+    endfunc
+
+    *-- Splits a theme into its blocks, "head { body }": a Collection of
+    *-- objects with Head and Body. Braces nest ({^2026-01-01} in a body is
+    *-- fine), and braces inside quotes do not count.
+    protected function ParseBlocks(tcContent)
+        local loBlocks, loBlock, lnLen, lnI, lnStart, lnOpen, lnDepth, lcChar, lcQuote
+        loBlocks = createobject("Collection")
+        lnLen    = len(tcContent)
+        lnStart  = 1
+        lnI      = 1
+        do while lnI <= lnLen
+            if substr(tcContent, lnI, 1) != '{'
+                lnI = lnI + 1
+                loop
+            endif
+            lnOpen  = lnI
+            lnDepth = 0
+            lcQuote = ''
+            do while lnI <= lnLen
+                lcChar = substr(tcContent, lnI, 1)
+                do case
+                case !empty(lcQuote)
+                    if lcChar == lcQuote
+                        lcQuote = ''
+                    endif
+                case lcChar == '"' or lcChar == "'"
+                    lcQuote = lcChar
+                case lcChar == '{'
+                    lnDepth = lnDepth + 1
+                case lcChar == '}'
+                    lnDepth = lnDepth - 1
+                endcase
+                if lnDepth = 0
+                    exit
+                endif
+                lnI = lnI + 1
+            enddo
+            loBlock = createobject("Empty")
+            =addproperty(loBlock, "Head", this.TrimAll(substr(tcContent, lnStart, lnOpen - lnStart)))
+            =addproperty(loBlock, "Body", this.TrimAll(substr(tcContent, lnOpen + 1, lnI - lnOpen - 1)))
+            if lnDepth > 0
+                this.oLogger.LogWarning("The block '" + loBlock.Head + "' is never closed with }")
+            endif
+            loBlocks.add(loBlock)
+            lnI     = lnI + 1
+            lnStart = lnI
+        enddo
+        return loBlocks
     endfunc
 
     protected function ParseStyles(tcContent)
-        this.GetRegexPattern('selectors')
-        local loCollectionMatch, loSubMatch, loStyles, loResult
-        loCollectionMatch = this.oRegExp.Execute(tcContent)
+        local loBlocks, loBlock, loStyles, loResult
         loStyles = createobject("Collection")
-
-        for each loSubMatch in loCollectionMatch
-            loResult = this.ExtractStyles(loSubMatch)
-            if !isnull(loResult)
-                loStyles.add(loResult)
-                this.oMetrics.nStylesApplied = this.oMetrics.nStylesApplied + 1
+        loBlocks = this.ParseBlocks(tcContent)
+        for each loBlock in loBlocks
+            if !this.IsFunctionHead(loBlock.Head)
+                loResult = this.ExtractStyles(loBlock.Head, loBlock.Body)
+                if !isnull(loResult)
+                    loStyles.add(loResult)
+                    this.oMetrics.nStylesApplied = this.oMetrics.nStylesApplied + 1
+                endif
             endif
         endfor
-
         return loStyles
     endfunc
 
-    protected function ExtractStyles(toSubMatch)
-        local lcStyles, lcSelectorArea, loSelectorCollection, loSelector
-        loSelectorCollection = createobject("Collection")
-        lcStyles       = alltrim(toSubMatch.value)
-        lcSelectorArea = alltrim(strextract('[' + lcStyles, '[', '{', 1))
-        lcStyles       = alltrim(strextract(lcStyles, '{', '}'))
-
-        if at(',', lcSelectorArea) > 0
-            local i
-            for i = 1 to getwordcount(lcSelectorArea, ',')
-                loSelector = this.parseSelector(alltrim(getwordnum(lcSelectorArea, i, ',')), lcStyles)
-                loSelectorCollection.add(loSelector)
-            endfor
-        else
-            if lower(lcSelectorArea) == '_res_'
-                if empty(lcStyles)
-                    return .null.
-                endif
-                this.loadResourcesOptimized(lcStyles)
-                return .null.
+    *-- One block: the _res_ block loads the resources (and returns .null.);
+    *-- any other gives a Collection with one selector per name of its list.
+    protected function ExtractStyles(tcHead, tcBody)
+        local loSelectorCollection, lcHead, lcSelector, i
+        if empty(tcHead)
+            this.oLogger.LogWarning("A block has no selector: { " + left(tcBody, 40) + " }")
+            return .null.
+        endif
+        lcHead = chrtran(tcHead, chr(9) + chr(13) + chr(10), '   ')
+        if lower(alltrim(lcHead)) == '_res_'
+            if !empty(tcBody)
+                this.loadResourcesOptimized(tcBody)
             endif
-            loSelector = this.parseSelector(lcSelectorArea, lcStyles)
-            loSelectorCollection.add(loSelector)
+            return .null.
         endif
 
+        loSelectorCollection = createobject("Collection")
+        for i = 1 to getwordcount(lcHead, ',')
+            lcSelector = alltrim(getwordnum(lcHead, i, ','))
+            do case
+            case empty(lcSelector)
+            case ' ' $ lcSelector
+                this.oLogger.LogWarning("Selector not understood (a selector has no spaces): '" + lcSelector + "'")
+            otherwise
+                loSelectorCollection.add(this.parseSelector(lcSelector, tcBody))
+            endcase
+        endfor
+        if loSelectorCollection.count = 0
+            return .null.
+        endif
         return loSelectorCollection
     endfunc
 
@@ -994,55 +1039,86 @@ define class FoxStyleSheet as custom
     endfunc
 
     protected function ExtractFunctions(tcContent)
-        local loMatchCollection, loSubMatch, loResult
-        this.GetRegexPattern('functions')
-        loMatchCollection = this.oRegExp.Execute(tcContent)
-        if type('loMatchCollection') != 'O'
-            return
-        endif
-        for each loSubMatch in loMatchCollection
-            loResult = this.parseFunction(loSubMatch.value)
+        local loBlocks, loBlock, lcName
+        loBlocks = this.ParseBlocks(tcContent)
+        for each loBlock in loBlocks
+            if this.IsFunctionHead(loBlock.Head)
+                lcName = lower(alltrim(substr(chrtran(loBlock.Head, chr(9) + chr(13) + chr(10), '   '), 9)))
+                if this.oFunctions.getkey(lcName) > 0
+                    this.oFunctions.remove(lcName)
+                endif
+                this.oFunctions.add(loBlock.Body, lcName)
+            endif
         endfor
     endfunc
 
-    protected procedure parseFunction(tcFunction)
-        local lcFuncName, lcFuncBody
-        lcFuncName = lower(alltrim(strextract(tcFunction, 'function', '{', 1)))
-        lcFuncBody = alltrim(strextract(tcFunction, '{', '}', 1))
-        this.oFunctions.add(lcFuncBody, lcFuncName)
-    endproc
+    protected function IsFunctionHead(tcHead)
+        return lower(getwordnum(chrtran(tcHead, chr(9) + chr(13) + chr(10), '   '), 1)) == 'function'
+    endfunc
+
+    protected function TrimAll(tcText)
+        return alltrim(tcText, 1, ' ', chr(9), chr(13), chr(10))
+    endfunc
 
     *----------------------------------------------------------
     * Variable / expression evaluation
     *----------------------------------------------------------
     protected function EvalExpressionOptimized(tcValue, tbJustExpand)
-        local loMatchCollection, lcValue, lcKey, lvResult, loSubMatch, lcResourceValue
-        this.GetRegexPattern('variables')
-        loMatchCollection = this.oRegExp.Execute(tcValue)
-        lcValue  = tcValue
-        lvResult = lcValue
-
-        if type('loMatchCollection') == 'O' and loMatchCollection.count > 0
-            for each loSubMatch in loMatchCollection
-                lcKey           = lower(alltrim(substr(loSubMatch.value, 2)))
-                lcResourceValue = this.GetResourceOptimized(lcKey)
-                if !empty(lcResourceValue)
-                    lcValue = strtran(lcValue, loSubMatch.value, lcResourceValue)
-                    if left(lcValue, 1) == '$'
-                        lcValue = this.EvalExpressionOptimized(lcValue, .t.)
-                    endif
+        local lcValue, lcBefore, lnLevel, lvResult
+        lcValue = tcValue
+        if '$' $ lcValue
+            lcValue = this.ExpandVariables(lcValue)
+            * a resource may name another ($borderFocus = $accent), 5 levels at most
+            lnLevel = 0
+            do while left(lcValue, 1) == '$' and lnLevel < 5
+                lcBefore = lcValue
+                lcValue  = this.ExpandVariables(lcValue)
+                if lcValue == lcBefore
+                    exit
                 endif
-            endfor
-            lvResult = lcValue
+                lnLevel = lnLevel + 1
+            enddo
         endif
 
-        try
-            if !tbJustExpand
-                lvResult = evaluate(lvResult)
-            endif
-        catch
-        endtry
+        lvResult = lcValue
+        if !tbJustExpand
+            try
+                lvResult = evaluate(lcValue)
+            catch
+            endtry
+        endif
         return lvResult
+    endfunc
+
+    *-- Replaces each $name by its resource, as a whole word ($accent does not
+    *-- touch $accentSoft); an unknown name stays as written.
+    protected function ExpandVariables(tcText)
+        local lcOut, lcRest, lnAt, lnEnd, lcName, lcValue
+        lcOut  = ''
+        lcRest = tcText
+        lnAt   = at('$', lcRest)
+        do while lnAt > 0
+            lcOut  = lcOut + left(lcRest, lnAt - 1)
+            lcRest = substr(lcRest, lnAt + 1)
+            lnEnd  = 1
+            do while lnEnd <= len(lcRest) and this.IsWordChar(substr(lcRest, lnEnd, 1))
+                lnEnd = lnEnd + 1
+            enddo
+            lcName  = left(lcRest, lnEnd - 1)
+            lcValue = iif(empty(lcName), '', this.GetResourceOptimized(lcName))
+            if empty(lcValue)
+                lcOut = lcOut + '$' + lcName
+            else
+                lcOut = lcOut + lcValue
+            endif
+            lcRest = substr(lcRest, lnEnd)
+            lnAt   = at('$', lcRest)
+        enddo
+        return lcOut + lcRest
+    endfunc
+
+    protected function IsWordChar(tcChar)
+        return isalpha(tcChar) or isdigit(tcChar) or tcChar == '_'
     endfunc
 
     *----------------------------------------------------------
