@@ -4,3 +4,15 @@ publish*/
 node_modules/
 .claude/worktrees/
 *.log
+
+# Codejock: commercial, bring your own (never in git)
+Fss/
+**/Fss/
+*.ocx
+*.lic
+*.cjstyles
+# compiled and runtime output
+*.fxp
+*.FXP
+*.err
+*.ERR
