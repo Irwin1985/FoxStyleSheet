@@ -226,6 +226,38 @@ DEFINE CLASS TestLog AS Custom
 		__assert.Equal(lnBefore, LogLines(loFss.cPath + "FoxStyleSheet.log", "| INFO"))
 	ENDPROC
 
+	*-- The log never shrank: past nMaxLogBytes it moves to .old and starts again
+	PROCEDURE Test_LogIsCapped() HELP [Fact, Trait("Category", "Log")]
+		LOCAL loLogger, lcFile, lnI, laInfo[1]
+		lcFile = ADDBS(SYS(2023)) + SYS(2015) + ".log"
+		loLogger = CREATEOBJECT("FssLogger")
+		loLogger.SetLogFile(lcFile)
+		loLogger.nMaxLogBytes = 500
+		FOR lnI = 1 TO 50
+			loLogger.LogWarning("line " + TRANSFORM(lnI) + " of a log that has to be capped")
+		NEXT
+		__assert.True(ADIR(laInfo, lcFile) = 1)
+		__assert.True(laInfo[1, 2] <= 600, "size " + TRANSFORM(laInfo[1, 2]))
+		__assert.True(FILE(FORCEEXT(lcFile, "old")), "the previous log is kept as .old")
+		__assert.True("line 50 " $ FILETOSTR(lcFile), "the last line is in the current log")
+		DELETE FILE (lcFile)
+		DELETE FILE (FORCEEXT(lcFile, "old"))
+	ENDPROC
+
+	*-- Every line used to SET DATE, CENTURY and HOURS of the application and put them back
+	PROCEDURE Test_LogLeavesDateSettingsAlone() HELP [Fact, Trait("Category", "Log")]
+		LOCAL loLogger, lcFile, lcMark
+		lcFile = ADDBS(SYS(2023)) + SYS(2015) + ".log"
+		lcMark = SET("MARK")
+		SET MARK TO "|"
+		loLogger = CREATEOBJECT("FssLogger")
+		loLogger.SetLogFile(lcFile)
+		loLogger.LogWarning("dates")
+		__assert.Equal("|", SET("MARK"))
+		SET MARK TO (lcMark)
+		DELETE FILE (lcFile)
+	ENDPROC
+
 	*-- A logger without a file wrote FoxStyleSheet.log into the current folder
 	PROCEDURE Test_LoggerDoesNotWriteToCurrentFolder() HELP [Fact, Trait("Category", "Log")]
 		LOCAL loLogger, lnBefore

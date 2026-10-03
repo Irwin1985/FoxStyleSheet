@@ -374,7 +374,7 @@ define class FoxStyleSheet as custom
         local array laProp[1]
         =alines(laProp, tcStyles, 5)
         
-        this.oLogger.LogInfo("loadResourcesOptimized: " + transform(alen(laProp)) + " lines")
+        this.oLogger.LogDebug("loadResourcesOptimized: " + transform(alen(laProp)) + " lines")
         
         * First pass: load every variable as written
         for i = 1 to alen(laProp)
@@ -386,7 +386,7 @@ define class FoxStyleSheet as custom
             try
                 this.oResources.add(lcValue, lcProp)
                 this.oResourcesIndex.add(this.oResources.count, lcProp)
-                this.oLogger.LogInfo("Resource loaded: " + lcProp + " = " + lcValue)
+                this.oLogger.LogDebug("Resource loaded: " + lcProp + " = " + lcValue)
             catch to loEx
                 this.oLogger.LogFromException(loEx)
             endtry
@@ -408,7 +408,7 @@ define class FoxStyleSheet as custom
                 lcValue = this.oResources.item(lcProp)
                 if '$' $ lcValue
                     lcResolved = this.EvalExpressionOptimized(lcValue, .t.)
-                    this.oLogger.LogInfo("Resource resolved, pass " + transform(lnPasses) + ": " + lcProp + " = " + lcResolved)
+                    this.oLogger.LogDebug("Resource resolved, pass " + transform(lnPasses) + ": " + lcProp + " = " + lcResolved)
                 else
                     lcResolved = lcValue
                 endif
@@ -1193,7 +1193,7 @@ define class FoxStyleSheet as custom
         lcOcxFile  = iif(empty(this.cCodejockOcx), lcFssPath + 'Codejock.SkinFramework.v22.1.0.ocx', this.cCodejockOcx)
 
         if !file(lcSkinFile)
-            this.oLogger.LogInfo("addTitleBar skipped: the skin file " + lcSkinFile + " is not there (see cSkinFile).")
+            this.oLogger.LogDebug("addTitleBar skipped: the skin file " + lcSkinFile + " is not there (see cSkinFile).")
             return
         endif
 
@@ -1204,11 +1204,11 @@ define class FoxStyleSheet as custom
                 loHelper = createobject("FssOCXHelper")
                 loHelper.SetLogger(this.oLogger)
                 if !loHelper.registerClass(lcOcxFile, this.cCodejockProgId)
-                    this.oLogger.LogInfo("addTitleBar skipped: Codejock OCX found but registration failed (run as Administrator once).")
+                    this.oLogger.LogDebug("addTitleBar skipped: Codejock OCX found but registration failed (run as Administrator once).")
                     return
                 endif
             else
-                this.oLogger.LogInfo("addTitleBar skipped: " + this.cCodejockProgId + " is not registered and " + lcOcxFile + " is not there (see cCodejockOcx).")
+                this.oLogger.LogDebug("addTitleBar skipped: " + this.cCodejockProgId + " is not registered and " + lcOcxFile + " is not there (see cCodejockOcx).")
                 return
             endif
         endif
@@ -1437,7 +1437,8 @@ enddefine
 *==============================================================
 define class FssLogger as custom
     protected cLogFile
-    lDebugMode = .f.
+    lDebugMode   = .f.
+    nMaxLogBytes = 1048576
     nErrors    = 0
     oErrors    = .null.
     cLastError = ''
@@ -1485,33 +1486,26 @@ define class FssLogger as custom
     endproc
 
     procedure log(tnType, tcMessage)
-        if empty(this.cLogFile)
-            this.cLogFile = fullpath('FoxStyleSheet.log')
-        endif
+        local lcType, lcLine
+
         * Support legacy single-string call: log("message")
         if type('tnType') == 'C'
             tcMessage = tnType
             tnType    = LOG_INFO
         endif
+        if empty(this.cLogFile)
+            this.cLogFile = addbs(addbs(getenv("APPDATA")) + 'FoxStyleSheet') + 'FoxStyleSheet.log'
+        endif
 
-        local lcType, lcDateAct, lcCenturyAct, lnHour, lcLogText
         if tnType = LOG_ERROR
             this.nErrors    = this.nErrors + 1
             this.oErrors.add(tcMessage)
             this.cLastError = tcMessage
         endif
-        lcDateAct    = set("Date")
-        lcCenturyAct = set("Century")
-        lnHour       = set("Hours")
-        set date italian
-        set century on
-        set hours to 24
 
         do case
         case tnType = LOG_ERROR
             lcType = "ERROR  "
-        case tnType = LOG_INFO
-            lcType = "INFO   "
         case tnType = LOG_WARNING
             lcType = "WARNING"
         case tnType = LOG_DEBUG
@@ -1520,15 +1514,29 @@ define class FssLogger as custom
             lcType = "INFO   "
         endcase
 
+        * ISO date and time: it does not depend on SET DATE, and does not touch it
+        lcLine = ttoc(datetime(), 3) + " | " + lcType + " | " + tcMessage + CRLF
         try
-            lcLogText = ttoc(datetime()) + " | " + lcType + " | " + tcMessage + CRLF
-            =strtofile(lcLogText, this.cLogFile, 1)
+            if !directory(justpath(this.cLogFile))
+                md (justpath(this.cLogFile))
+            endif
+            this.CapLogFile()
+            =strtofile(lcLine, this.cLogFile, 1)
         catch
         endtry
+    endproc
 
-        set century &lcCenturyAct
-        set date &lcDateAct
-        set hours to (lnHour)
+    * Past nMaxLogBytes the log moves to .old (replacing the previous one) and
+    * starts again; 0 means no cap. ADIR gives the size (FSIZE needs SET COMPATIBLE).
+    protected procedure CapLogFile
+        local laInfo[1], lcOld
+        if this.nMaxLogBytes > 0 and adir(laInfo, this.cLogFile) = 1 and laInfo[1, 2] > this.nMaxLogBytes
+            lcOld = forceext(this.cLogFile, 'old')
+            if file(lcOld)
+                erase (lcOld)
+            endif
+            rename (this.cLogFile) to (lcOld)
+        endif
     endproc
 enddefine
 
