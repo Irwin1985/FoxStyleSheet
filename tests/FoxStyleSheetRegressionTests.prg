@@ -299,6 +299,56 @@ DEFINE CLASS TestThemesOnAForm AS Custom
 ENDDEFINE
 
 * ============================================================ *
+* Built-in themes: link("Word", ThisForm), no files to copy
+* ============================================================ *
+DEFINE CLASS TestBuiltInThemes AS Custom
+
+	PROCEDURE SetUp
+		SET PROCEDURE TO (FSS_PRG) ADDITIVE
+	ENDPROC
+
+	PROCEDURE Test_LinkByThemeName() HELP [Fact, Trait("Category", "BuiltIn")]
+		LOCAL loForm, loFss
+		loForm = MakeForm()
+		loFss = CREATEOBJECT("FoxStyleSheet")
+		__assert.True(loFss.link("Word", loForm), loFss.cLastError)
+		__assert.Equal(RGB(240, 243, 248), loForm.BackColor, "Word's $surface")
+		__assert.Equal("Segoe UI", loForm.txtName.FontName)
+	ENDPROC
+
+	PROCEDURE Test_ThemeNameIgnoresCaseAndExtension() HELP [Fact, Trait("Category", "BuiltIn")]
+		LOCAL loForm, loFss
+		loForm = MakeForm()
+		loFss = CREATEOBJECT("FoxStyleSheet")
+		__assert.True(loFss.link("office-word-dark.FSS", loForm), loFss.cLastError)
+		__assert.False(loForm.BackColor == RGB(240, 240, 240))
+	ENDPROC
+
+	PROCEDURE Test_UnknownThemeNameIsReported() HELP [Fact, Trait("Category", "BuiltIn")]
+		LOCAL loForm, loFss
+		loForm = MakeForm()
+		loFss = CREATEOBJECT("FoxStyleSheet")
+		__assert.False(loFss.link("Wrod", loForm))
+		__assert.True("WROD" $ UPPER(loFss.cLastError), loFss.cLastError)
+		__assert.True("WORD" $ UPPER(loFss.cLastError), "the error lists the built-in names: " + loFss.cLastError)
+	ENDPROC
+
+	*-- The generated themes are the .fss files, byte for byte (but line ends)
+	PROCEDURE Test_BuiltInThemesMatchTheFiles() HELP [Fact, Trait("Category", "BuiltIn")]
+		LOCAL laThemes[1], lnThemes, lnI, lcName, lcFile, lcBuiltIn
+		lnThemes = ADIR(laThemes, "themes\*.fss")
+		__assert.Equal(lnThemes, GETWORDCOUNT(FssBuiltInThemeNames(), ","), FssBuiltInThemeNames())
+		FOR lnI = 1 TO lnThemes
+			lcName = JUSTSTEM(laThemes[lnI, 1])
+			lcFile = CHRTRAN(FILETOSTR("themes\" + laThemes[lnI, 1]), CHR(13), "")
+			lcBuiltIn = CHRTRAN(FssBuiltInTheme(lcName), CHR(13), "")
+			__assert.Equal(RTRIM(lcFile, 1, CHR(10), " "), RTRIM(lcBuiltIn, 1, CHR(10), " "), lcName + ": run tools\build-themes.ps1")
+		NEXT
+	ENDPROC
+
+ENDDEFINE
+
+* ============================================================ *
 * Helpers
 * ============================================================ *
 FUNCTION MakeForm
