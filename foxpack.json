@@ -1,0 +1,9 @@
+{
+  "name": "foxstylesheet",
+  "version": "2.1.0",
+  "description": "Style sheets for VFP 9 forms: CSS-like themes by class, name and event, with 14 built-in themes.",
+  "files": [
+    "foxstylesheet.prg"
+  ],
+  "usage": "SET PROCEDURE TO foxstylesheet.prg ADDITIVE"
+}
