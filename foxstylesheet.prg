@@ -20,7 +20,7 @@ return
 * CLASS: FoxStyleSheet
 * Main engine. Zero mandatory external dependencies.
 * Optional features:
-*   - Page backgrounds (rgb): requires System.app beside the PRG
+*   - Page backgrounds (rgb): a BMP written by the library itself
 *   - Custom title bar (frametheme): requires Codejock OCX + resources.dbf
 *==============================================================
 define class FoxStyleSheet as custom
@@ -31,8 +31,6 @@ define class FoxStyleSheet as custom
     * cPath:    APPDATA temp folder for logs and generated images
     cPrgPath = ''
     cPath    = ''
-
-    cSystemAppPath = ''
 
     * Errors of the last link() and of the event styles since then. They are
     * kept by the logger; these read them (see the _Access methods).
@@ -46,7 +44,7 @@ define class FoxStyleSheet as custom
     procedure init
         local lcPrgFile, lcPrgPath, lcPath
 
-        * Capture PRG's own directory for auto-locating System.app and Fss\.
+        * Capture PRG's own directory for auto-locating Fss\ (Codejock).
         * Inside a method SYS(16) is "PROCEDURE CLASS.METHOD <path>": the prefix
         * has exactly two spaces, and the path may have its own (rule 41).
         lcPrgFile = sys(16)
@@ -67,7 +65,6 @@ define class FoxStyleSheet as custom
             .oControls       = createobject("Collection")
             .oImages         = createobject("Collection")
             .oMetrics        = createobject("FssStyleMetrics")
-            .cSystemAppPath  = ''
         endwith
 
         * APPDATA folder for temp images and log file
@@ -76,18 +73,15 @@ define class FoxStyleSheet as custom
         if !directory(lcPath)
             mkdir '&lcPath'
         endif
-
-        * Auto-locate System.app: PRG folder first, then APPDATA cache
-        this.cSystemAppPath = this.FindSystemApp()
     endproc
 
     *----------------------------------------------------------
     * Feature detection (public)
     *----------------------------------------------------------
 
-    * Returns .T. if Page background images (rgb()) are available
+    * Page backgrounds (rgb()) need nothing since 2.1.0: always .T.
     function IsDrawingAvailable()
-        return !empty(this.cSystemAppPath) and file(this.cSystemAppPath)
+        return .t.
     endfunc
 
     * Returns .T. if Codejock SkinFramework is registered on this machine
@@ -200,7 +194,7 @@ define class FoxStyleSheet as custom
         try
             local array laFiles[1]
             local i, lcFile
-            if adir(laFiles, this.cPath + '*.png') > 0
+            if adir(laFiles, this.cPath + '*.bmp') > 0
                 for i = 1 to alen(laFiles, 1)
                     try
                         lcFile = this.cPath + laFiles[i, 1]
@@ -547,7 +541,7 @@ define class FoxStyleSheet as custom
                 lnW = toControl.parent.width
                 lnH = toControl.parent.height
                 if lnW > 0 and lnH > 0
-                    lcImage = this.cPath + sys(2015) + '.png'
+                    lcImage = this.cPath + sys(2015) + '.bmp'
                     if this.DrawImage(lcImage, lnW, lnH, lnRed, lnGreen, lnBlue)
                         try
                             toControl.picture = lcImage
@@ -1122,18 +1116,11 @@ define class FoxStyleSheet as custom
     endfunc
 
     *----------------------------------------------------------
-    * DrawImage: Page background via System.Drawing
-    * Requires System.app beside foxstylesheet.prg
+    * DrawImage: a solid-colour 24-bit BMP, written byte by byte: it needs no
+    * GDI+, no helper application and no COM. Returns .T. when the file is there.
     *----------------------------------------------------------
     function DrawImage(tcOutput, tnWidth, tnHeight, tnRed, tnGreen, tnBlue)
-        local llResult, llDrawReady, lcSafAct
-        llResult = .f.
-
-        * Graceful skip — inform once per session via log
-        if !this.IsDrawingAvailable()
-            this.oLogger.LogInfo("DrawImage skipped: place System.app beside foxstylesheet.prg to enable Page backgrounds.")
-            return .f.
-        endif
+        local lnRowBytes, lnPixels, lcRow, lcBmp, lcSafety, llResult, loEx
 
         if tnWidth <= 0 or tnHeight <= 0
             this.oLogger.LogWarning("DrawImage: invalid dimensions.")
@@ -1144,92 +1131,30 @@ define class FoxStyleSheet as custom
             return .f.
         endif
 
-        lcSafAct = set("Safety")
-        set safety off
+        * every row is padded to a multiple of 4 bytes; pixels go as B, G, R
+        lnRowBytes = ceiling(tnWidth * 3 / 4) * 4
+        lnPixels   = lnRowBytes * tnHeight
+        lcRow = replicate(chr(tnBlue) + chr(tnGreen) + chr(tnRed), tnWidth) + replicate(chr(0), lnRowBytes - tnWidth * 3)
+        lcBmp = 'BM' + bintoc(54 + lnPixels, '4RS') + bintoc(0, '4RS') + bintoc(54, '4RS') + ;
+                bintoc(40, '4RS') + bintoc(tnWidth, '4RS') + bintoc(tnHeight, '4RS') + ;
+                bintoc(1, '2RS') + bintoc(24, '2RS') + bintoc(0, '4RS') + bintoc(lnPixels, '4RS') + ;
+                bintoc(2835, '4RS') + bintoc(2835, '4RS') + bintoc(0, '4RS') + bintoc(0, '4RS') + ;
+                replicate(lcRow, tnHeight)
 
-        llDrawReady = .f.
+        * STRTOFILE over an existing file asks with SET SAFETY ON (rule 63)
+        lcSafety = set("Safety")
+        set safety off
+        llResult = .f.
         try
-            if type('_screen.system') != 'O'
-                do (this.cSystemAppPath)
-            endif
-            if type('_screen.system.Drawing') == 'O'
-                llDrawReady = .t.
-            else
-                this.oLogger.LogWarning("DrawImage: _screen.system.Drawing not available.")
-            endif
+            llResult = strtofile(lcBmp, tcOutput) = len(lcBmp)
         catch to loEx
             this.oLogger.LogFromException(loEx)
         endtry
+        set safety &lcSafety
 
-        if llDrawReady
-            try
-                local loBMP, loGFX, loBrush, loColor
-                with _screen.system.Drawing
-                    try
-                        loBMP    = .bitmap.New(tnWidth, tnHeight)
-                        loGFX    = .Graphics.FromImage(loBMP)
-                        loColor  = .color.FromRgb(tnRed, tnGreen, tnBlue)
-                        loBrush  = .SolidBrush.New(loColor)
-                        loGFX.clear(loColor)
-                        loGFX.FillRectangle(loBrush, 0, 0, tnWidth, tnHeight)
-                        loBrush.Dispose()
-                        loGFX.Dispose()
-
-                        if file(tcOutput)
-                            delete file (tcOutput)
-                        endif
-
-                        try
-                            loBMP.save(tcOutput, .Imaging.ImageFormat.Bmp)
-                            llResult = .t.
-                        catch
-                            try
-                                loBMP.save(tcOutput, .Imaging.ImageFormat.Png)
-                                llResult = .t.
-                            catch
-                            endtry
-                        endtry
-
-                        inkey(0.1)
-                        loBMP.Dispose()
-                    catch to loEx
-                        this.oLogger.LogFromException(loEx)
-                        try
-                            if type('loBrush') == 'O' and !isnull(loBrush)
-                                loBrush.Dispose()
-                            endif
-                        catch
-                        endtry
-                        try
-                            if type('loGFX') == 'O' and !isnull(loGFX)
-                                loGFX.Dispose()
-                            endif
-                        catch
-                        endtry
-                        try
-                            if type('loBMP') == 'O' and !isnull(loBMP)
-                                loBMP.Dispose()
-                            endif
-                        catch
-                        endtry
-                    endtry
-                endwith
-            catch to loEx
-                this.oLogger.LogFromException(loEx)
-            endtry
+        if llResult
+            this.oImages.add(tcOutput)
         endif
-
-        set safety &lcSafAct
-
-        if llResult and file(tcOutput)
-            local array laFI[1]
-            if adir(laFI, tcOutput) > 0 and laFI[1, 2] > 0
-                this.oImages.add(tcOutput)
-            else
-                llResult = .f.
-            endif
-        endif
-
         return llResult
     endfunc
 
@@ -1340,26 +1265,6 @@ define class FoxStyleSheet as custom
         otherwise
             lcResult = ''
         endcase
-        return lcResult
-    endfunc
-
-    protected function FindSystemApp()
-        local lcCandidate, lcResult
-        lcResult = ''
-        * 1) PRG's own folder
-        if !empty(this.cPrgPath)
-            lcCandidate = this.cPrgPath + 'System.app'
-            if file(lcCandidate)
-                lcResult = lcCandidate
-            endif
-        endif
-        * 2) APPDATA cache (extracted in a previous session)
-        if empty(lcResult)
-            lcCandidate = this.cPath + 'System.app'
-            if file(lcCandidate)
-                lcResult = lcCandidate
-            endif
-        endif
         return lcResult
     endfunc
 

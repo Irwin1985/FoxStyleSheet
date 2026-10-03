@@ -168,22 +168,8 @@ define class TestFoxStyleSheetInit as Custom
         __assert.True(llOk, "destroy() no debe lanzar excepcion (regresion B1)")
     endproc
 
-    procedure TestInit_IsDrawingAvailable_FalseWhenNoSystemApp() HELP [Fact, Trait("Category", "Init")]
-        local lcOrig
-        lcOrig = this.oFss.cSystemAppPath
-        this.oFss.cSystemAppPath = ''
-        __assert.False(this.oFss.IsDrawingAvailable(), "IsDrawingAvailable debe ser .F. sin System.app")
-        this.oFss.cSystemAppPath = lcOrig
-    endproc
-
-    procedure TestInit_IsDrawingAvailable_TrueWhenSystemAppPresent() HELP [Fact, Trait("Category", "Init")]
-        local lcFake
-        lcFake = sys(2023) + '\System.app'
-        =strtofile('dummy', lcFake)
-        this.oFss.cSystemAppPath = lcFake
-        __assert.True(this.oFss.IsDrawingAvailable(), "IsDrawingAvailable debe ser .T. cuando System.app existe")
-        delete file (lcFake)
-        this.oFss.cSystemAppPath = ''
+    procedure TestInit_IsDrawingAvailable_AlwaysTrue() HELP [Fact, Trait("Category", "Init")]
+        __assert.True(this.oFss.IsDrawingAvailable(), "Page backgrounds need nothing since 2.1.0")
     endproc
 
     procedure TestInit_IsCodejockAvailable_ReturnsLogical() HELP [Fact, Trait("Category", "Init")]
@@ -578,40 +564,27 @@ define class TestDrawImage as Custom
         this.oFss = .null.
     endproc
 
-    procedure TestDrawImage_NoSystemApp_ReturnsFalseNoCrash() HELP [Fact, Trait("Category", "DrawImage")]
-        * Regression: Bug B2/B3 ? should skip gracefully, no crash
-        this.oFss.cSystemAppPath = ''
-        local lcOut, llResult, llCrash
-        lcOut    = sys(2023) + '\test_draw.png'
-        llResult = .t.
-        llCrash  = .f.
-        try
-            llResult = this.oFss.DrawImage(lcOut, 100, 100, 255, 0, 0)
-        catch
-            llCrash = .t.
-        endtry
-        __assert.False(llResult, "DrawImage sin System.app debe retornar .F.")
-        __assert.False(llCrash,  "DrawImage sin System.app no debe lanzar excepcion")
+    procedure TestDrawImage_WritesABmp() HELP [Fact, Trait("Category", "DrawImage")]
+        local lcOut, lcBmp
+        lcOut = addbs(sys(2023)) + sys(2015) + '.bmp'
+        __assert.True(this.oFss.DrawImage(lcOut, 3, 2, 255, 0, 0), "DrawImage must write the file")
+        lcBmp = filetostr(lcOut)
+        __assert.Equal("BM", left(lcBmp, 2))
+        __assert.Equal(54 + 12 * 2, len(lcBmp), "3 pixels of 3 bytes, padded to 12, times 2 rows")
+        __assert.Equal(chr(0) + chr(0) + chr(255), substr(lcBmp, 55, 3), "red, stored as B G R")
+        delete file (lcOut)
     endproc
 
     procedure TestDrawImage_InvalidDimensions_ReturnsFalse() HELP [Fact, Trait("Category", "DrawImage")]
-        local lcFake, llResult
-        lcFake = sys(2023) + '\System.app'
-        =strtofile('dummy', lcFake)
-        this.oFss.cSystemAppPath = lcFake
-        llResult = this.oFss.DrawImage(sys(2023) + '\out.png', 0, 0, 255, 0, 0)
+        local llResult
+        llResult = this.oFss.DrawImage(sys(2023) + '\out.bmp', 0, 0, 255, 0, 0)
         __assert.False(llResult, "Dimensiones cero deben retornar .F.")
-        delete file (lcFake)
     endproc
 
     procedure TestDrawImage_InvalidRgb_ReturnsFalse() HELP [Fact, Trait("Category", "DrawImage")]
-        local lcFake, llResult
-        lcFake = sys(2023) + '\System.app'
-        =strtofile('dummy', lcFake)
-        this.oFss.cSystemAppPath = lcFake
-        llResult = this.oFss.DrawImage(sys(2023) + '\out.png', 100, 100, 999, 0, 0)
+        local llResult
+        llResult = this.oFss.DrawImage(sys(2023) + '\out.bmp', 100, 100, 999, 0, 0)
         __assert.False(llResult, "RGB fuera de rango debe retornar .F.")
-        delete file (lcFake)
     endproc
 
 enddefine
@@ -676,47 +649,6 @@ enddefine
 
 
 *==============================================================
-* FIND SYSTEM APP TESTS
-*==============================================================
-define class TestFindSystemApp as Custom
-
-    oFss = .null.
-
-    procedure SetUp
-        set procedure to FSS_PRG additive
-        this.oFss = createobject("FssTestDouble")
-    endproc
-
-    procedure TearDown
-        this.oFss = .null.
-    endproc
-
-    procedure TestFindSystemApp_NotFound_ReturnsEmpty() HELP [Fact, Trait("Category", "FindSystemApp")]
-        local lcOrigPrg, lcOrigPath, lcResult
-        lcOrigPrg  = this.oFss.cPrgPath
-        lcOrigPath = this.oFss.cPath
-        this.oFss.cPrgPath = 'C:\nonexistent\path999\'
-        this.oFss.cPath    = 'C:\nonexistent\path998\'
-        lcResult = this.oFss.PubFindSystemApp()
-        __assert.Equal("", lcResult, "FindSystemApp debe retornar '' cuando no existe")
-        this.oFss.cPrgPath = lcOrigPrg
-        this.oFss.cPath    = lcOrigPath
-    endproc
-
-    procedure TestFindSystemApp_FindsInPrgFolder() HELP [Fact, Trait("Category", "FindSystemApp")]
-        local lcTempDir, lcFake, lcOrigPrg, lcResult
-        lcTempDir = addbs(sys(2023))
-        lcFake    = lcTempDir + 'System.app'
-        =strtofile('dummy', lcFake)
-        lcOrigPrg = this.oFss.cPrgPath
-        this.oFss.cPrgPath = lcTempDir
-        lcResult = this.oFss.PubFindSystemApp()
-        __assert.Equal(lcFake, lcResult, "FindSystemApp debe encontrar System.app en cPrgPath")
-        delete file (lcFake)
-        this.oFss.cPrgPath = lcOrigPrg
-    endproc
-
-enddefine
 
 
 *==============================================================
@@ -1001,10 +933,6 @@ define class FssTestDouble as FoxStyleSheet
 
     function PubGetSchema(tcColor)
         return this.getSchema(tcColor)
-    endfunc
-
-    function PubFindSystemApp()
-        return this.FindSystemApp()
     endfunc
 
     procedure PubGetControlsByClass(toControl, tcClass, toList)

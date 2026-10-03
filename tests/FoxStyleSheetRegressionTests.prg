@@ -174,15 +174,25 @@ DEFINE CLASS TestOptional AS Custom
 		SET PROCEDURE TO (FSS_PRG) ADDITIVE
 	ENDPROC
 
-	*-- A solid page background without System.app
+	*-- A solid page background without System.app: a BMP written by the library
 	PROCEDURE Test_PageBackgroundWithoutSystemApp() HELP [Fact, Trait("Category", "Optional")]
-		LOCAL loForm, loFss
+		LOCAL loForm, loFss, lcPicture, lcBmp, loPicture
 		loForm = MakeForm()
 		loFss = CREATEOBJECT("FoxStyleSheet")
 		loFss.link("page {" + CHR(13) + "  picture = rgb(10, 20, 30)" + CHR(13) + "}", loForm)
-		__assert.NotEmpty(loForm.pgf.Page1.Picture)
-		__assert.True(FILE(loForm.pgf.Page1.Picture), loForm.pgf.Page1.Picture)
+		lcPicture = loForm.pgf.Page1.Picture
 		__assert.Equal(0, loFss.nErrors, loFss.cLastError)
+		__assert.Equal("BMP", UPPER(JUSTEXT(lcPicture)), lcPicture)
+		lcBmp = FILETOSTR(lcPicture)
+		__assert.Equal("BM", LEFT(lcBmp, 2))
+		__assert.Equal(LEN(lcBmp), CTOBIN(SUBSTR(lcBmp, 3, 4), "4RS"), "the size in the header")
+		__assert.Equal(CHR(30) + CHR(20) + CHR(10), SUBSTR(lcBmp, 55, 3), "the first pixel, in BGR")
+		loPicture = LOADPICTURE(lcPicture)
+		__assert.IsObject(loPicture)
+	ENDPROC
+
+	PROCEDURE Test_NoSystemAppDependency() HELP [Fact, Trait("Category", "Optional")]
+		__assert.False("SYSTEM.APP" $ UPPER(FILETOSTR(FSS_PRG)))
 	ENDPROC
 
 	*-- Bring your own Codejock: the ProgId is a property
