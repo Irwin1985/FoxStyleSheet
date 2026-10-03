@@ -131,6 +131,18 @@ DEFINE CLASS TestParser AS Custom
 	ENDPROC
 
 	*-- Defect 4: and a space before the brace
+	*-- "*.onGotFocus" lost its event and painted every control at link()
+	PROCEDURE Test_UniversalSelectorWithEvent() HELP [Fact, Trait("Category", "Parser")]
+		LOCAL loForm, loFss
+		loForm = MakeForm()
+		loFss = CREATEOBJECT("FoxStyleSheet")
+		loFss.link("*.onGotFocus { backColor = rgb(9, 9, 9) }", loForm)
+		__assert.False(loForm.txtName.BackColor == RGB(9, 9, 9), "nothing changes before the event")
+		RAISEEVENT(loForm.txtName, "GotFocus")
+		__assert.Equal(RGB(9, 9, 9), loForm.txtName.BackColor)
+		__assert.False(loForm.edtNotes.BackColor == RGB(9, 9, 9), "only the control that got the focus")
+	ENDPROC
+
 	PROCEDURE Test_SelectorWithoutSpaceBeforeBrace() HELP [Fact, Trait("Category", "Parser")]
 		LOCAL loForm, loFss
 		loForm = MakeForm()
@@ -317,6 +329,19 @@ DEFINE CLASS TestLifetime AS Custom
 		__assert.Equal(RGB(1, 2, 3), loForm.txtName.BackColor)
 	ENDPROC
 
+
+	*-- ".onInit" styles: the engine used to call the control's Init again on Activate,
+	*-- running the developer's own Init code a second time
+	PROCEDURE Test_OnInitDoesNotRunInitAgain() HELP [Fact, Trait("Category", "Lifetime")]
+		LOCAL loForm, loFss
+		loForm = MakeForm()
+		loFss = CREATEOBJECT("FoxStyleSheet")
+		loFss.link(".txtSub.onInit { backColor = rgb(5, 5, 5) }", loForm)
+		RAISEEVENT(loForm, "Activate")
+		__assert.Equal(RGB(5, 5, 5), loForm.txtSub.BackColor)
+		__assert.Equal(1, loForm.txtSub.nInitRuns, "Init runs once, when the control is created")
+	ENDPROC
+
 ENDDEFINE
 
 FUNCTION LinkWithALocalEngine
@@ -415,4 +440,8 @@ FUNCTION LogLines
 ENDFUNC
 
 DEFINE CLASS ProbeTextBox AS TextBox
+	nInitRuns = 0
+	PROCEDURE Init
+		THIS.nInitRuns = THIS.nInitRuns + 1
+	ENDPROC
 ENDDEFINE

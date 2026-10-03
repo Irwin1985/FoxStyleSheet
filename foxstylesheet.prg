@@ -689,7 +689,7 @@ define class FoxStyleSheet as custom
         case left(tcSelectorArea, 1) == '.'
             this.ParseNameSelector(loSelector, tcSelectorArea)
         case left(tcSelectorArea, 1) == '*'
-            this.ParseUniversalSelector(loSelector)
+            this.ParseUniversalSelector(loSelector, tcSelectorArea)
         otherwise
             this.ParseClassSelector(loSelector, tcSelectorArea)
         endcase
@@ -729,9 +729,17 @@ define class FoxStyleSheet as custom
         loSelector.ControlName = lcControlName
     endproc
 
-    protected procedure ParseUniversalSelector(loSelector)
+    *-- "*" or "*.onGotFocus": every control, now or when the event fires
+    protected procedure ParseUniversalSelector(loSelector, tcSelectorArea)
+        local lcEvent
         loSelector.ControlName = "*"
         loSelector.ControlType = "*"
+        if occurs('.', tcSelectorArea) = 1
+            lcEvent = alltrim(getwordnum(tcSelectorArea, 2, '.'))
+            if lower(left(lcEvent, 2)) == 'on'
+                loSelector.ControlEvent = substr(lcEvent, 3)
+            endif
+        endif
     endproc
 
     protected procedure ParseClassSelector(loSelector, tcSelectorArea)
@@ -791,8 +799,9 @@ define class FoxStyleSheet as custom
                 for each lcControl in this.oControls
                     try
                         loControl = this.GetCachedControl(lcControl)
+                        * the Init styles, without running the control's Init again
                         if type('loControl') == 'O' and !isnull(loControl)
-                            loControl.init()
+                            this.ApplyEventFor(loControl, 'Init')
                         endif
                     catch to loEx
                         this.oLogger.LogFromException(loEx)
@@ -923,17 +932,19 @@ define class FoxStyleSheet as custom
     *-- most specific: "*", the base class, the class itself, the control's name.
     protected function ControlBehavior(tv1, tv2, tv3, tv4, tv5)
         local array laEvents[1]
-        local array laStyles[4]
-        local loControl, lcEvent, lnS
 
-        store .null. to laStyles
         =aevents(laEvents, 0)
         if alen(laEvents) < 2 or type('laEvents[1]') != 'O' or type('this.oThisform') != 'O' or isnull(this.oThisform)
             return
         endif
-        loControl = laEvents[1]
-        lcEvent   = laEvents[2]
+        this.ApplyEventFor(laEvents[1], laEvents[2])
+    endfunc
 
+    protected procedure ApplyEventFor(loControl, lcEvent)
+        local array laStyles[4]
+        local lnS
+
+        store .null. to laStyles
         laStyles[1] = this.FormStyles('oStarClass' + lcEvent + 'Styles')
         laStyles[2] = this.FormStyles('o' + loControl.BaseClass + 'Class' + lcEvent + 'Styles')
         if !(lower(loControl.Class) == lower(loControl.BaseClass))
@@ -948,7 +959,7 @@ define class FoxStyleSheet as custom
                 this.ApplyEventStyles(loControl, laStyles[lnS])
             endif
         endfor
-    endfunc
+    endproc
 
     protected function FormStyles(tcProp)
         if pemstatus(this.oThisform, tcProp, 5)
