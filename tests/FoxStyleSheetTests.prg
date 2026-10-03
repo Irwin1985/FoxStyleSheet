@@ -876,7 +876,7 @@ define class TestTraversal as Custom
         * The label moves twice (once per selector): top = 60 - 6 - 6 = 48
         * This pins down the current behaviour: when both selectors carry
         * a _ line, each one applies on its own.
-        __assert.Equal(lnOrigTop - 12, loForm.lbl1.top, "Dos selectores aplican _ dos veces (comportamiento esperado)")
+        __assert.Equal(lnOrigTop - 12, loForm.lbl1.top, "Two selectors run _ twice (expected behaviour)")
         loForm.release()
         loForm = .null.
     endproc

@@ -299,6 +299,34 @@ DEFINE CLASS TestThemesOnAForm AS Custom
 ENDDEFINE
 
 * ============================================================ *
+* The engine lives as long as the form
+* ============================================================ *
+DEFINE CLASS TestLifetime AS Custom
+
+	PROCEDURE SetUp
+		SET PROCEDURE TO (FSS_PRG) ADDITIVE
+	ENDPROC
+
+	*-- An engine in a LOCAL of the form's Init died with it, and its Destroy
+	*-- unbound the events: the event styles stopped working
+	PROCEDURE Test_EventStylesSurviveTheEngineVariable() HELP [Fact, Trait("Category", "Lifetime")]
+		LOCAL loForm
+		loForm = MakeForm()
+		LinkWithALocalEngine(loForm)
+		RAISEEVENT(loForm.txtName, "GotFocus")
+		__assert.Equal(RGB(1, 2, 3), loForm.txtName.BackColor)
+	ENDPROC
+
+ENDDEFINE
+
+FUNCTION LinkWithALocalEngine
+	LPARAMETERS toForm
+	LOCAL loFss
+	loFss = CREATEOBJECT("FoxStyleSheet")
+	loFss.link("TextBox.onGotFocus { backColor = rgb(1, 2, 3) }", toForm)
+ENDFUNC
+
+* ============================================================ *
 * Built-in themes: link("Word", ThisForm), no files to copy
 * ============================================================ *
 DEFINE CLASS TestBuiltInThemes AS Custom

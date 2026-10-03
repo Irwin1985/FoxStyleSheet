@@ -7,13 +7,12 @@
 #define FSS_KEY        '_'
 #define FSS_VERSION    '2.1.0'
 
-* Entry point: DO foxstylesheet.prg WITH "theme.fss", ThisForm
+* Entry point: DO foxstylesheet.prg WITH "Word", ThisForm
 lparameters tcStyle, toThisform
 
-local lcPropName
-lcPropName = sys(2015)
-=addproperty(toThisform, lcPropName, createobject("FoxStyleSheet"))
-toThisform. &lcPropName..link(tcStyle, toThisform)
+local loFss
+loFss = createobject("FoxStyleSheet")
+loFss.link(tcStyle, toThisform)
 return
 
 *==============================================================
@@ -44,7 +43,8 @@ define class FoxStyleSheet as custom
     oErrors    = .null.
     cLastError = ''
 
-    protected oLogger, oResources, oResourcesIndex
+    protected oLogger, oResources, oResourcesIndex, cFormProperty
+    cFormProperty = ''
     protected oFunctions, oThisform, oImages, oControls, oMetrics
 
     procedure init
@@ -136,6 +136,13 @@ define class FoxStyleSheet as custom
         this.oMetrics.Reset()
         this.oMetrics.StartTimer()
         this.oThisform = toForm
+
+        * The event bindings live as long as this object, so it hangs itself
+        * from the form: an engine in a LOCAL of the form's Init keeps working.
+        if empty(this.cFormProperty) and type('toForm') == 'O' and !isnull(toForm)
+            this.cFormProperty = 'oFoxStyleSheet' + sys(2015)
+            =addproperty(toForm, this.cFormProperty, this)
+        endif
 
         this.oLogger.SetLogFile(this.cPath + 'FoxStyleSheet.log')
 
