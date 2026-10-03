@@ -100,20 +100,17 @@ CommandButton {
     specialEffect   = 1
     themes          = .f.
     backColor       = $surfaceRaised
-    borderColor     = $border
     mousePointer    = 15
 }
 
 CommandButton.onMouseEnter {
     backColor   = $accent
     foreColor   = $bg
-    borderColor = $accent
 }
 
 CommandButton.onMouseLeave {
     backColor   = $surfaceRaised
     foreColor   = $accent
-    borderColor = $border
 }
 
 Label {

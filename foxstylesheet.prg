@@ -34,14 +34,25 @@ define class FoxStyleSheet as custom
 
     cSystemAppPath = ''
 
+    * Errors of the last link() and of the event styles since then. They are
+    * kept by the logger; these read them (see the _Access methods).
+    nErrors    = 0
+    oErrors    = .null.
+    cLastError = ''
+
     protected oLogger, oResources, oResourcesIndex, oRegExp, oRegexPatterns
     protected oFunctions, oThisform, oImages, oControls, oMetrics
 
     procedure init
         local lcPrgFile, lcPrgPath, lcPath
 
-        * Capture PRG's own directory for auto-locating System.app / resources.dbf
+        * Capture PRG's own directory for auto-locating System.app and Fss\.
+        * Inside a method SYS(16) is "PROCEDURE CLASS.METHOD <path>": the prefix
+        * has exactly two spaces, and the path may have its own (rule 41).
         lcPrgFile = sys(16)
+        if upper(left(lcPrgFile, 10)) == "PROCEDURE " and at(" ", lcPrgFile, 2) > 0
+            lcPrgFile = substr(lcPrgFile, at(" ", lcPrgFile, 2) + 1)
+        endif
         if !empty(lcPrgFile)
             lcPrgPath = addbs(justpath(lcPrgFile))
             this.cPrgPath = lcPrgPath
@@ -102,31 +113,52 @@ define class FoxStyleSheet as custom
         return this.oMetrics.GetReport()
     endfunc
 
+    procedure ClearErrors
+        if vartype(this.oLogger) == 'O'
+            this.oLogger.ClearErrors()
+        endif
+    endproc
+
+    function nErrors_Access
+        return iif(vartype(this.oLogger) == 'O', this.oLogger.nErrors, 0)
+    endfunc
+
+    function oErrors_Access
+        return iif(vartype(this.oLogger) == 'O', this.oLogger.oErrors, .null.)
+    endfunc
+
+    function cLastError_Access
+        return iif(vartype(this.oLogger) == 'O', this.oLogger.cLastError, '')
+    endfunc
+
     *----------------------------------------------------------
     * Main entry point
     *----------------------------------------------------------
-    procedure link(tcFile, toForm)
+    function link(tcFile, toForm)
+        local lcContent, loStyles
+
+        this.ClearErrors()
         this.oMetrics.Reset()
         this.oMetrics.StartTimer()
         this.oThisform = toForm
 
         this.oLogger.SetLogFile(this.cPath + 'FoxStyleSheet.log')
 
-        local lcContent, loStyles
         lcContent = this.LoadContent(tcFile)
-        lcContent = this.RemoveComments(lcContent)
+        if !empty(lcContent)
+            lcContent = this.RemoveComments(lcContent)
+            this.ExtractFunctions(lcContent)
+            loStyles = this.ParseStyles(lcContent)
+            this.oMetrics.EndTimer('parse')
 
-        this.ExtractFunctions(lcContent)
+            this.oMetrics.StartTimer()
+            this.ApplyAllStyles(loStyles, toForm)
+            this.oMetrics.EndTimer('apply')
 
-        loStyles = this.ParseStyles(lcContent)
-        this.oMetrics.EndTimer('parse')
-
-        this.oMetrics.StartTimer()
-        this.ApplyAllStyles(loStyles, toForm)
-        this.oMetrics.EndTimer('apply')
-
-        this.BindFormEvents()
-    endproc
+            this.BindFormEvents()
+        endif
+        return this.oLogger.nErrors = 0
+    endfunc
 
     *----------------------------------------------------------
     * Lifecycle
@@ -223,12 +255,19 @@ define class FoxStyleSheet as custom
         return llOk
     endfunc
 
-    protected function LoadContent(tcFile)
-        if file(tcFile)
-            return filetostr(tcFile)
-        else
-            return tcFile
-        endif
+    *-- A theme is a file, or the text of a theme (it has a "{").
+    protected function LoadContent(tcTheme)
+        do case
+        case vartype(tcTheme) != 'C' or empty(tcTheme)
+            this.oLogger.LogError("link: no theme was given")
+            return ''
+        case file(tcTheme)
+            return filetostr(tcTheme)
+        case '{' $ tcTheme
+            return tcTheme
+        endcase
+        this.oLogger.LogError("link: theme file not found: " + tcTheme)
+        return ''
     endfunc
 
     protected function RemoveComments(tcContent)
@@ -433,8 +472,12 @@ define class FoxStyleSheet as custom
                     alines(laExec, lcValue, 5, FSS_SEPARATOR)
                     for lnExec = 1 to alen(laExec, 1)
                         lcExec = this.EvalExpressionOptimized(laExec[lnExec], .t.)
-                        lcExec = strtran(lcExec, 'this', 'toControl')
-                        &lcExec
+                        lcExec = this.RewriteThis(lcExec, 'toControl', 'this.oThisform')
+                        try
+                            &lcExec
+                        catch to loEx
+                            this.oLogger.LogFromException(loEx)
+                        endtry
                     endfor
                 endif
                 loop
@@ -816,92 +859,138 @@ define class FoxStyleSheet as custom
         return llOk
     endfunc
 
+    *-- Runs on every bound event. The styles are applied from the least to the
+    *-- most specific: "*", the base class, the class itself, the control's name.
     protected function ControlBehavior(tv1, tv2, tv3, tv4, tv5)
-        try
-            local array arrEvents[1]
-            local array laStyles[2]
-            local loControl, i, j, loStyles, lcProp, lcValue, lcClassStylesProp
-            laStyles[1] = .null.
-            laStyles[2] = .null.
+        local array laEvents[1]
+        local array laStyles[4]
+        local loControl, lcEvent, lnS
 
-            =aevents(arrEvents, 0)
-            if alen(arrEvents) = 0 or type('arrEvents[1]') != 'O'
-                return
+        store .null. to laStyles
+        =aevents(laEvents, 0)
+        if alen(laEvents) < 2 or type('laEvents[1]') != 'O' or type('this.oThisform') != 'O' or isnull(this.oThisform)
+            return
+        endif
+        loControl = laEvents[1]
+        lcEvent   = laEvents[2]
+
+        laStyles[1] = this.FormStyles('oStarClass' + lcEvent + 'Styles')
+        laStyles[2] = this.FormStyles('o' + loControl.BaseClass + 'Class' + lcEvent + 'Styles')
+        if !(lower(loControl.Class) == lower(loControl.BaseClass))
+            laStyles[3] = this.FormStyles('o' + loControl.Class + 'Class' + lcEvent + 'Styles')
+        endif
+        if pemstatus(loControl, 'o' + lcEvent + 'Styles', 5)
+            laStyles[4] = evaluate('loControl.o' + lcEvent + 'Styles')
+        endif
+
+        for lnS = 1 to 4
+            if !isnull(laStyles[lnS])
+                this.ApplyEventStyles(loControl, laStyles[lnS])
             endif
+        endfor
+    endfunc
 
-            loControl = arrEvents[1]
+    protected function FormStyles(tcProp)
+        if pemstatus(this.oThisform, tcProp, 5)
+            return evaluate('this.oThisform.' + tcProp)
+        endif
+        return .null.
+    endfunc
 
-            if type('this.oThisform') != 'O' or isnull(this.oThisform)
-                return
-            endif
-
-            if alen(arrEvents, 1) >= 2 and type('loControl') == 'O'
-                * Universal star styles check first (lower priority)
-                lcClassStylesProp = textmerge('oStarClass<<arrEvents[2]>>Styles')
-                if pemstatus(this.oThisform, lcClassStylesProp, 5)
-                    laStyles[1] = evaluate("this.oThisform." + lcClassStylesProp)
-                endif
-                * Class-specific styles overwrite star (higher priority)
-                lcClassStylesProp = textmerge('o<<loControl.Class>>Class<<arrEvents[2]>>Styles')
-                if pemstatus(this.oThisform, lcClassStylesProp, 5)
-                    laStyles[1] = evaluate("this.oThisform." + lcClassStylesProp)
-                endif
-                lcProp = textmerge('o<<arrEvents[2]>>Styles')
-                if pemstatus(loControl, lcProp, 5)
-                    laStyles[2] = evaluate("loControl." + lcProp)
-                endif
-
-                for each loStyles in laStyles
-                    if !isnull(loStyles)
-                        for i = 1 to loStyles.count
-                            lcProp  = loStyles.getkey(i)
-                            lcValue = loStyles.item(i)
-                            try
-                                do case
-                                case lcProp == FSS_KEY
-                                    if left(lcValue, 1) != '$'
-                                        local array laLines[1]
-                                        local lcLine2
-                                        alines(laLines, lcValue, 5, FSS_SEPARATOR)
-                                        for j = 1 to alen(laLines, 1)
-                                            lcLine2 = this.EvalExpressionOptimized(laLines[j], .t.)
-                                            lcLine2 = strtran(lcLine2, 'this', 'loControl')
-                                            &lcLine2
-                                        endfor
-                                    else
-                                        local lcFuncBody, lcCtrlLoc, lcScript
-                                        lcFuncBody = this.oFunctions.item(lower(substr(lcValue, 2)))
-                                        lcFuncBody = strtran(lcFuncBody, 'this', 'loControl')
-                                        lcCtrlLoc  = sys(1272, loControl)
-                                        text to lcScript noshow textmerge
-                                            Local loControl
-                                            loControl = _screen.ActiveForm<<Substr(lcCtrlLoc, At('.',lcCtrlLoc))>>
-                                            If Type('loControl') != 'O'
-                                                Return
-                                            EndIf
-                                            <<lcFuncBody>>
-                                        ENDTEXT
-                                        execscript(lcScript)
-                                    endif
-                                case lower(alltrim(lcProp)) == 'editmenu'
-                                    local lbResp
-                                    lbResp = this.EvalExpressionOptimized(lcValue)
-                                    if type('lbResp') == 'L' and lbResp
-                                        this.popMenu()
-                                    endif
-                                otherwise
-                                    loControl. &lcProp = this.EvalExpressionOptimized(lcValue)
-                                endcase
-                            catch to loEx
-                                this.oLogger.LogFromException(loEx)
-                            endtry
-                        endfor
+    protected procedure ApplyEventStyles(toControl, toStyles)
+        local i, j, lcProp, lcValue, lcLine, lcFuncBody, lcCtrlLoc, lcScript, lbResp
+        local array laLines[1]
+        for i = 1 to toStyles.count
+            lcProp  = toStyles.getkey(i)
+            lcValue = toStyles.item(i)
+            try
+                do case
+                case lcProp == FSS_KEY and left(lcValue, 1) != '$'
+                    alines(laLines, lcValue, 5, FSS_SEPARATOR)
+                    for j = 1 to alen(laLines, 1)
+                        lcLine = this.EvalExpressionOptimized(laLines[j], .t.)
+                        lcLine = this.RewriteThis(lcLine, 'toControl', 'this.oThisform')
+                        &lcLine
+                    endfor
+                case lcProp == FSS_KEY
+                    lcFuncBody = this.oFunctions.item(lower(substr(lcValue, 2)))
+                    lcFuncBody = this.RewriteThis(lcFuncBody, 'loControl', '_screen.ActiveForm')
+                    lcCtrlLoc  = sys(1272, toControl)
+                    text to lcScript noshow textmerge
+                        Local loControl
+                        loControl = _screen.ActiveForm<<Substr(lcCtrlLoc, At('.',lcCtrlLoc))>>
+                        If Type('loControl') != 'O'
+                            Return
+                        EndIf
+                        <<lcFuncBody>>
+                    ENDTEXT
+                    execscript(lcScript)
+                case lower(alltrim(lcProp)) == 'editmenu'
+                    lbResp = this.EvalExpressionOptimized(lcValue)
+                    if type('lbResp') == 'L' and lbResp
+                        this.popMenu()
                     endif
-                endfor
-            endif
-        catch to loEx
-            this.oLogger.LogFromException(loEx)
-        endtry
+                otherwise
+                    toControl. &lcProp = this.EvalExpressionOptimized(lcValue)
+                endcase
+            catch to loEx
+                this.oLogger.LogFromException(loEx)
+            endtry
+        endfor
+    endproc
+
+    *-- this and thisform in a line of theme code, rewritten as words and only
+    *-- outside string literals: "this.Tag = 'this field'" keeps its text.
+    protected function RewriteThis(tcCode, tcThis, tcThisform)
+        local lcOut, lnI, lnLen, lcChar, lcQuote, lnStart, lcWord, lcPrev
+        lcOut   = ''
+        lcQuote = ''
+        lnLen   = len(tcCode)
+        lnI     = 1
+        do while lnI <= lnLen
+            lcChar = substr(tcCode, lnI, 1)
+            do case
+            case !empty(lcQuote)
+                lcOut = lcOut + lcChar
+                if lcChar == lcQuote
+                    lcQuote = ''
+                endif
+                lnI = lnI + 1
+            case lcChar == '"' or lcChar == "'"
+                lcQuote = lcChar
+                lcOut   = lcOut + lcChar
+                lnI     = lnI + 1
+            case lcChar == '['
+                * a string, unless it is an array subscript: laX[1], loX.aItems[2]
+                lcPrev = right(rtrim(lcOut), 1)
+                if !(isalpha(lcPrev) or isdigit(lcPrev) or lcPrev == '_' or lcPrev == ')')
+                    lcQuote = ']'
+                endif
+                lcOut = lcOut + lcChar
+                lnI   = lnI + 1
+            case isalpha(lcChar) or lcChar == '_'
+                lnStart = lnI
+                do while lnI <= lnLen and (isalpha(substr(tcCode, lnI, 1)) or isdigit(substr(tcCode, lnI, 1)) or substr(tcCode, lnI, 1) == '_')
+                    lnI = lnI + 1
+                enddo
+                lcWord = substr(tcCode, lnStart, lnI - lnStart)
+                do case
+                case right(lcOut, 1) == '.'
+                    * a member (loX.this) or a logical (.T.), not the keyword
+                    lcOut = lcOut + lcWord
+                case lower(lcWord) == 'thisform'
+                    lcOut = lcOut + tcThisform
+                case lower(lcWord) == 'this'
+                    lcOut = lcOut + tcThis
+                otherwise
+                    lcOut = lcOut + lcWord
+                endcase
+            otherwise
+                lcOut = lcOut + lcChar
+                lnI   = lnI + 1
+            endcase
+        enddo
+        return lcOut
     endfunc
 
     protected function ExtractFunctions(tcContent)
@@ -920,8 +1009,6 @@ define class FoxStyleSheet as custom
         local lcFuncName, lcFuncBody
         lcFuncName = lower(alltrim(strextract(tcFunction, 'function', '{', 1)))
         lcFuncBody = alltrim(strextract(tcFunction, '{', '}', 1))
-        this.GetRegexPattern('thisform')
-        lcFuncBody = this.oRegExp.replace(lcFuncBody, '_screen.activeform')
         this.oFunctions.add(lcFuncBody, lcFuncName)
     endproc
 
@@ -966,7 +1053,7 @@ define class FoxStyleSheet as custom
         local llResult, llDrawReady, lcSafAct
         llResult = .f.
 
-        * Graceful skip â€” inform once per session via log
+        * Graceful skip — inform once per session via log
         if !this.IsDrawingAvailable()
             this.oLogger.LogInfo("DrawImage skipped: place System.app beside foxstylesheet.prg to enable Page backgrounds.")
             return .f.
@@ -1364,6 +1451,19 @@ enddefine
 define class FssLogger as custom
     protected cLogFile
     lDebugMode = .f.
+    nErrors    = 0
+    oErrors    = .null.
+    cLastError = ''
+
+    procedure init
+        this.oErrors = createobject("Collection")
+    endproc
+
+    procedure ClearErrors
+        this.nErrors    = 0
+        this.oErrors    = createobject("Collection")
+        this.cLastError = ''
+    endproc
 
     procedure SetLogFile(tcLogFile)
         this.cLogFile = tcLogFile
@@ -1408,6 +1508,11 @@ define class FssLogger as custom
         endif
 
         local lcType, lcDateAct, lcCenturyAct, lnHour, lcLogText
+        if tnType = LOG_ERROR
+            this.nErrors    = this.nErrors + 1
+            this.oErrors.add(tcMessage)
+            this.cLastError = tcMessage
+        endif
         lcDateAct    = set("Date")
         lcCenturyAct = set("Century")
         lnHour       = set("Hours")

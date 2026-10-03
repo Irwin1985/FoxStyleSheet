@@ -99,20 +99,17 @@ CommandButton {
     specialEffect   = 1
     themes          = .f.
     backColor       = $accentSoft
-    borderColor     = $accent
     mousePointer    = 15
 }
 
 CommandButton.onMouseEnter {
     backColor   = $accent
     foreColor   = $white
-    borderColor = $accentDark
 }
 
 CommandButton.onMouseLeave {
     backColor   = $accentSoft
     foreColor   = $accent
-    borderColor = $accent
 }
 
 Label {
