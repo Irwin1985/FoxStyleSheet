@@ -21,7 +21,7 @@ return
 * Main engine. Zero mandatory external dependencies.
 * Optional features:
 *   - Page backgrounds (rgb): a BMP written by the library itself
-*   - Custom title bar (frametheme): requires Codejock OCX + resources.dbf
+*   - Custom title bar (frametheme): bring your own Codejock SkinFramework
 *==============================================================
 define class FoxStyleSheet as custom
 
@@ -31,6 +31,12 @@ define class FoxStyleSheet as custom
     * cPath:    APPDATA temp folder for logs and generated images
     cPrgPath = ''
     cPath    = ''
+
+    * Codejock SkinFramework is commercial: bring your own. Empty paths mean
+    * the Fss\ folder beside foxstylesheet.prg, as in 2.0.
+    cCodejockProgId = 'Codejock.SkinFramework.22.1.0'
+    cCodejockOcx    = ''
+    cSkinFile       = ''
 
     * Errors of the last link() and of the event styles since then. They are
     * kept by the logger; these read them (see the _Access methods).
@@ -90,7 +96,7 @@ define class FoxStyleSheet as custom
         llResult = .f.
         try
             loHelper = createobject("FssOCXHelper")
-            llResult = loHelper.isClassRegistered("Codejock.SkinFramework.22.1.0")
+            llResult = loHelper.isClassRegistered(this.cCodejockProgId)
         catch
             llResult = .f.
         endtry
@@ -1182,12 +1188,12 @@ define class FoxStyleSheet as custom
     *----------------------------------------------------------
     protected procedure addTitleBar(toThisform, tcColor)
         local lcFssPath, lcSkinFile, lcOcxFile, lcSchema, llOk
-        lcFssPath = this.cPrgPath + 'Fss\'
-        lcSkinFile = lcFssPath + 'Windows10.cjstyles'
-        lcOcxFile  = lcFssPath + 'Codejock.SkinFramework.v22.1.0.ocx'
+        lcFssPath  = this.cPrgPath + 'Fss\'
+        lcSkinFile = iif(empty(this.cSkinFile), lcFssPath + 'Windows10.cjstyles', this.cSkinFile)
+        lcOcxFile  = iif(empty(this.cCodejockOcx), lcFssPath + 'Codejock.SkinFramework.v22.1.0.ocx', this.cCodejockOcx)
 
         if !file(lcSkinFile)
-            this.oLogger.LogInfo("addTitleBar skipped: Windows10.cjstyles not found in Fss\ folder beside foxstylesheet.prg.")
+            this.oLogger.LogInfo("addTitleBar skipped: the skin file " + lcSkinFile + " is not there (see cSkinFile).")
             return
         endif
 
@@ -1197,12 +1203,12 @@ define class FoxStyleSheet as custom
                 local loHelper
                 loHelper = createobject("FssOCXHelper")
                 loHelper.SetLogger(this.oLogger)
-                if !loHelper.registerClass(lcOcxFile, "Codejock.SkinFramework.22.1.0")
+                if !loHelper.registerClass(lcOcxFile, this.cCodejockProgId)
                     this.oLogger.LogInfo("addTitleBar skipped: Codejock OCX found but registration failed (run as Administrator once).")
                     return
                 endif
             else
-                this.oLogger.LogInfo("addTitleBar skipped: Codejock SkinFramework not registered and OCX not found in Fss\ folder.")
+                this.oLogger.LogInfo("addTitleBar skipped: " + this.cCodejockProgId + " is not registered and " + lcOcxFile + " is not there (see cCodejockOcx).")
                 return
             endif
         endif
@@ -1225,10 +1231,10 @@ define class FoxStyleSheet as custom
 
         try
             if type('_screen.oFssTitleBar') == 'O' and vartype(_screen.oFssTitleBar) != 'X'
-                _screen.oFssTitleBar.paintTitleBar(lcSkinFile, lcSchema, toThisform)
+                _screen.oFssTitleBar.paintTitleBar(lcSkinFile, lcSchema, toThisform, this.cCodejockProgId)
             else
                 =addproperty(_screen, 'oFssTitleBar', createobject('FssCustomTitleBar'))
-                _screen.oFssTitleBar.paintTitleBar(lcSkinFile, lcSchema, toThisform)
+                _screen.oFssTitleBar.paintTitleBar(lcSkinFile, lcSchema, toThisform, this.cCodejockProgId)
             endif
         catch to loEx
             this.oLogger.LogFromException(loEx)
@@ -1530,19 +1536,20 @@ enddefine
 *==============================================================
 * CLASS: FssCustomTitleBar
 * Codejock SkinFramework integration. Only instantiated when
-* IsCodejockAvailable() returns .T.
+* IsCodejockAvailable() returns .T.; the OLE control is created with the
+* ProgId the engine was given (cCodejockProgId).
 *==============================================================
 define class FssCustomTitleBar as custom
-    add object skinframework as olecontrol with ;
-        top      = 0, ;
-        left     = 0, ;
-        oleclass = "Codejock.SkinFramework.22.1.0", ;
-        height   = 26, ;
-        width    = 26, ;
-        name     = "skinframework"
+    * At run time only a Form takes an OleControl (a Custom or _screen give
+    * error 1744), so the control lives on a Form that is never shown.
+    oHost = .null.
 
-    procedure paintTitleBar(tcStyleFile, tcIniFile, toForm)
-        with this.skinframework
+    procedure paintTitleBar(tcStyleFile, tcIniFile, toForm, tcProgId)
+        if isnull(this.oHost)
+            this.oHost = createobject('Form')
+            this.oHost.AddObject('oSkin', 'OleControl', evl(tcProgId, 'Codejock.SkinFramework.22.1.0'))
+        endif
+        with this.oHost.oSkin
             .loadSkin(tcStyleFile, tcIniFile)
             .applyWindow(toForm.hwnd)
             .ApplyOptions = 2
