@@ -5,7 +5,7 @@
 #define CRLF           chr(13) + chr(10)
 #define FSS_SEPARATOR  ' _fss_lf '
 #define FSS_KEY        '_'
-#define FSS_VERSION    '2.0.0'
+#define FSS_VERSION    '2.1.0'
 
 * Entry point: DO foxstylesheet.prg WITH "theme.fss", ThisForm
 lparameters tcStyle, toThisform
@@ -374,9 +374,9 @@ define class FoxStyleSheet as custom
         local array laProp[1]
         =alines(laProp, tcStyles, 5)
         
-        this.oLogger.LogInfo("loadResourcesOptimized: " + transform(alen(laProp)) + " lineas")
+        this.oLogger.LogInfo("loadResourcesOptimized: " + transform(alen(laProp)) + " lines")
         
-        * Primera pasada: cargar todas las variables sin resolver
+        * First pass: load every variable as written
         for i = 1 to alen(laProp)
             lcProp  = lower(alltrim(chrtran(getwordnum(laProp[i], 1, '='), chr(9), ' ')))
             lcValue = alltrim(chrtran(getwordnum(laProp[i], 2, '='), chr(9), ' '))
@@ -386,13 +386,13 @@ define class FoxStyleSheet as custom
             try
                 this.oResources.add(lcValue, lcProp)
                 this.oResourcesIndex.add(this.oResources.count, lcProp)
-                this.oLogger.LogInfo("Resource cargada: " + lcProp + " = " + lcValue)
+                this.oLogger.LogInfo("Resource loaded: " + lcProp + " = " + lcValue)
             catch to loEx
                 this.oLogger.LogFromException(loEx)
             endtry
         endfor
         
-        * Segunda pasada: resolver referencias cruzadas (max 5 niveles)
+        * Second pass: resolve the variables that name others (5 levels at most)
         for lnPasses = 1 to 5
             lnCount = this.oResources.count
             dimension laKeys[lnCount]
@@ -408,7 +408,7 @@ define class FoxStyleSheet as custom
                 lcValue = this.oResources.item(lcProp)
                 if '$' $ lcValue
                     lcResolved = this.EvalExpressionOptimized(lcValue, .t.)
-                    this.oLogger.LogInfo("Resource resuelta pasada " + transform(lnPasses) + ": " + lcProp + " = " + lcResolved)
+                    this.oLogger.LogInfo("Resource resolved, pass " + transform(lnPasses) + ": " + lcProp + " = " + lcResolved)
                 else
                     lcResolved = lcValue
                 endif
@@ -1169,17 +1169,17 @@ define class FoxStyleSheet as custom
     *----------------------------------------------------------
     procedure popMenu
         define popup EditMenu from mrow(), mcol() margin relative shadow color scheme 4 SHORTCUT
-        define bar _med_undo  of EditMenu prompt "\<Deshacer"         key CTRL+Z, "Ctrl+Z" PICTRES _med_undo  message "Deshace el ultimo comando"
-        define bar _med_redo  of EditMenu prompt "Re\<hacer"          key CTRL+R, "Ctrl+R" PICTRES _med_redo  message "Repite el ultimo comando"
-        define bar _med_sp100 of EditMenu prompt "\-"                 PICTRES _med_sp100
-        define bar _med_cut   of EditMenu prompt "Cor\<tar"           key CTRL+X, "Ctrl+X" PICTRES _med_cut   message "Elimina la seleccion y la coloca en el Portapapeles"
-        define bar _med_copy  of EditMenu prompt "\<Copiar"           key CTRL+C, "Ctrl+C" PICTRES _med_copy  message "Copia la seleccion en el portapapeles"
-        define bar _med_paste of EditMenu prompt "\<Pegar"            key CTRL+V, "Ctrl+V" PICTRES _med_paste message "Pega el contenido del Portapapeles"
-        define bar _med_pstlk of EditMenu prompt "Pegado \<Especial..."                    PICTRES _med_pstlk message "Pega como objeto vinculado o incrustado"
-        define bar _med_clear of EditMenu prompt "\<Limpiar"                               PICTRES _med_clear message "Elimina la seleccion sin copiarla"
-        define bar _med_sp200 of EditMenu prompt "\-"                 PICTRES _med_sp200
-        define bar _med_slcta of EditMenu prompt "Se\<leccionar Todo" key CTRL+A, "Ctrl+A" PICTRES _med_slcta message "Selecciona todo"
-        define bar _med_sp300 of EditMenu prompt "\-"                 PICTRES _med_sp300
+        define bar _med_undo  of EditMenu prompt "\<Undo"            key CTRL+Z, "Ctrl+Z" PICTRES _med_undo  message "Undoes the last change"
+        define bar _med_redo  of EditMenu prompt "\<Redo"            key CTRL+R, "Ctrl+R" PICTRES _med_redo  message "Redoes the last change"
+        define bar _med_sp100 of EditMenu prompt "\-"                PICTRES _med_sp100
+        define bar _med_cut   of EditMenu prompt "Cu\<t"             key CTRL+X, "Ctrl+X" PICTRES _med_cut   message "Moves the selection to the Clipboard"
+        define bar _med_copy  of EditMenu prompt "\<Copy"            key CTRL+C, "Ctrl+C" PICTRES _med_copy  message "Copies the selection to the Clipboard"
+        define bar _med_paste of EditMenu prompt "\<Paste"           key CTRL+V, "Ctrl+V" PICTRES _med_paste message "Pastes the contents of the Clipboard"
+        define bar _med_pstlk of EditMenu prompt "Paste \<Special..."                   PICTRES _med_pstlk message "Pastes as a linked or embedded object"
+        define bar _med_clear of EditMenu prompt "Cle\<ar"                              PICTRES _med_clear message "Removes the selection without copying it"
+        define bar _med_sp200 of EditMenu prompt "\-"                PICTRES _med_sp200
+        define bar _med_slcta of EditMenu prompt "Select \<All"      key CTRL+A, "Ctrl+A" PICTRES _med_slcta message "Selects everything"
+        define bar _med_sp300 of EditMenu prompt "\-"                PICTRES _med_sp300
         activate popup EditMenu
     endproc
 
