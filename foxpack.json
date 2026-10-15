@@ -1,7 +1,8 @@
 {
   "name": "foxstylesheet",
-  "version": "2.1.0",
-  "description": "Style sheets for VFP 9 forms: CSS-like themes by class, name and event, with 14 built-in themes.",
+  "version": "2.2.0",
+  "description": "Style sheets for VFP 9 forms: CSS-like themes by class, name and event, 16 built-in themes, and light and dark with a sun and moon switch.",
+  "license": "MIT",
   "files": [
     "foxstylesheet.prg"
   ],

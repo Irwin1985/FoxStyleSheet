@@ -1,5 +1,5 @@
 * FoxStyleSheetTests.prg
-* Test suite for FoxStyleSheet 2.1.0
+* Test suite for FoxStyleSheet 2.2.0
 * Run from the repository folder: foxproof run --prg tests\FoxStyleSheetTests.prg
 
 #define FSS_PRG 'foxstylesheet.prg'
@@ -113,7 +113,7 @@ define class TestMetrics as Custom
         local loM, lcReport
         loM      = createobject("FssStyleMetrics")
         lcReport = loM.GetReport()
-        __assert.True("2.1.0" $ lcReport, "The report must contain version 2.1.0")
+        __assert.True("2.2.0" $ lcReport, "The report must contain version 2.2.0")
     endproc
 
     procedure TestMetrics_GetReport_ContainsCounters() HELP [Fact, Trait("Category", "Metrics")]
@@ -146,7 +146,7 @@ define class TestFoxStyleSheetInit as Custom
     endproc
 
     procedure TestInit_VersionIsCorrect() HELP [Fact, Trait("Category", "Init")]
-        __assert.Equal("2.1.0", this.oFss.cVersion, "The version must be 2.1.0")
+        __assert.Equal("2.2.0", this.oFss.cVersion, "The version must be 2.2.0")
     endproc
 
     procedure TestInit_CPathContainsFoxStyleSheet() HELP [Fact, Trait("Category", "Init")]

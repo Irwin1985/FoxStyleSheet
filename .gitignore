@@ -16,3 +16,13 @@ Fss/
 *.FXP
 *.err
 *.ERR
+
+# Local tooling
+.claude/
+
+# Builds of the examples, and the libraries FoxPack restores
+*.exe
+FOXUSER.*
+foxuser.*
+_command.prg
+examples/*/lib/

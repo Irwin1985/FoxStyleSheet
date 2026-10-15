@@ -5,7 +5,14 @@
 #define CRLF           chr(13) + chr(10)
 #define FSS_SEPARATOR  ' _fss_lf '
 #define FSS_KEY        '_'
-#define FSS_VERSION    '2.1.0'
+#define FSS_VERSION    '2.2.0'
+#define FSS_ENGINE_PROPERTY  'oFoxStyleSheet'
+* DwmSetWindowAttribute: dark title bar (Windows 10 2004+; 19 before that),
+* caption and caption text colours (Windows 11)
+#define DWMWA_USE_IMMERSIVE_DARK_MODE        20
+#define DWMWA_USE_IMMERSIVE_DARK_MODE_OLD    19
+#define DWMWA_CAPTION_COLOR                  35
+#define DWMWA_TEXT_COLOR                     36
 
 * Entry point: DO foxstylesheet.prg WITH "Word", ThisForm
 lparameters tcStyle, toThisform
@@ -43,9 +50,19 @@ define class FoxStyleSheet as custom
     oErrors    = .null.
     cLastError = ''
 
+    * The theme of the last link(), as it was given: "dark", a path, or the
+    * text of a theme. FssThemeToggle reads it to know where to go next.
+    cTheme = ''
+
     protected oLogger, oResources, oResourcesIndex, cFormProperty
     cFormProperty = ''
     protected oFunctions, oThisform, oImages, oControls, oMetrics
+    * The properties link() hangs from the form and its controls, as
+    * "path|property": a second link() takes them down before it starts.
+    protected oAddedProperties, lLinked, lTitleBarSet
+    oAddedProperties = .null.
+    lLinked = .f.
+    lTitleBarSet = .f.
 
     procedure init
         local lcPrgFile, lcPrgPath, lcPath
@@ -70,6 +87,7 @@ define class FoxStyleSheet as custom
             .oFunctions      = createobject("Collection")
             .oControls       = createobject("Collection")
             .oImages         = createobject("Collection")
+            .oAddedProperties = createobject("Collection")
             .oMetrics        = createobject("FssStyleMetrics")
         endwith
 
@@ -130,17 +148,25 @@ define class FoxStyleSheet as custom
     * Main entry point
     *----------------------------------------------------------
     function link(tcFile, toForm)
-        local lcContent, loStyles
+        local lcContent, loStyles, llRelink
 
         this.ClearErrors()
         this.oMetrics.Reset()
         this.oMetrics.StartTimer()
+
+        * A second link() changes the theme: the event styles, functions and
+        * resources of the first one go away before the new one is read.
+        llRelink = this.lLinked
+        if llRelink
+            this.Unlink()
+        endif
         this.oThisform = toForm
+        this.cTheme = iif(vartype(tcFile) == 'C', tcFile, '')
 
         * The event bindings live as long as this object, so it hangs itself
         * from the form: an engine in a LOCAL of the form's Init keeps working.
         if empty(this.cFormProperty) and type('toForm') == 'O' and !isnull(toForm)
-            this.cFormProperty = 'oFoxStyleSheet' + sys(2015)
+            this.cFormProperty = FSS_ENGINE_PROPERTY + sys(2015)
             =addproperty(toForm, this.cFormProperty, this)
         endif
 
@@ -154,12 +180,72 @@ define class FoxStyleSheet as custom
             this.oMetrics.EndTimer('parse')
 
             this.oMetrics.StartTimer()
+            this.ClearToggleIcons(toForm)
             this.ApplyAllStyles(loStyles, toForm)
+            this.RefreshToggleIcons(toForm)
             this.oMetrics.EndTimer('apply')
 
             this.BindFormEvents()
+            this.lLinked = .t.
+            * a form already on screen will not fire Activate for the Init styles
+            if llRelink and type('toForm.Visible') == 'L' and toForm.Visible
+                this.onActivate()
+            endif
         endif
         return this.oLogger.nErrors = 0
+    endfunc
+
+    *-- Takes down what the last link() left on the form: the bindings, the
+    *-- event styles, the cached control lists, the functions and the resources.
+    *-- The static properties stay as they are: the next theme sets its own.
+    *-- The title bar goes back to the colours of Windows.
+    protected procedure Unlink
+        local lcEntry, lcPath, lcProperty, loObject, loEx
+        try
+            unbindevents(this)
+        catch
+        endtry
+        for each lcEntry in this.oAddedProperties
+            lcPath     = getwordnum(lcEntry, 1, '|')
+            lcProperty = getwordnum(lcEntry, 2, '|')
+            loObject   = this.GetCachedControl(lcPath)
+            try
+                if type('loObject') == 'O' and !isnull(loObject) and pemstatus(loObject, lcProperty, 5)
+                    =removeproperty(loObject, lcProperty)
+                endif
+            catch to loEx
+                this.oLogger.LogFromException(loEx)
+            endtry
+        endfor
+        this.oAddedProperties = createobject("Collection")
+        this.oControls        = createobject("Collection")
+        this.oFunctions       = createobject("Collection")
+        this.oResources       = createobject("Collection")
+        this.oResourcesIndex  = createobject("Collection")
+        * a title bar painted by the old theme goes back to Windows
+        if this.lTitleBarSet and type('this.oThisform') == 'O' and !isnull(this.oThisform)
+            this.SetTitleBar(this.oThisform, 'darktitlebar', .f.)
+            this.SetTitleBar(this.oThisform, 'titlebarcolor', -1)
+            this.SetTitleBar(this.oThisform, 'titlebartextcolor', -1)
+            this.lTitleBarSet = .f.
+        endif
+        this.lLinked = .f.
+    endproc
+
+    *-- addproperty() that link() can take down again (see Unlink)
+    protected procedure AddTrackedProperty(toObject, tcProperty, tvValue)
+        =addproperty(toObject, tcProperty, tvValue)
+        this.oAddedProperties.add(this.ControlPath(toObject) + '|' + tcProperty)
+    endproc
+
+    *-- The path of a control as GetCachedControl() evaluates it
+    protected function ControlPath(toControl)
+        local lcPath
+        if toControl == this.oThisform
+            return 'this.oThisform'
+        endif
+        lcPath = sys(1272, toControl)
+        return 'this.oThisform' + substr(lcPath, at('.', lcPath))
     endfunc
 
     *----------------------------------------------------------
@@ -473,7 +559,7 @@ define class FoxStyleSheet as custom
                 lcClassStylesProp = textmerge('o<<toSelector.ControlName>>Class<<toSelector.ControlEvent>>Styles')
                 if !pemstatus(toForm, lcClassProp, 5)
                     this.getControlsByClass(toForm, lower(toSelector.ControlName), loClassCollection)
-                    =addproperty(toForm, lcClassProp, loClassCollection)
+                    this.AddTrackedProperty(toForm, lcClassProp, loClassCollection)
                 else
                     loClassCollection = evaluate('toForm.' + lcClassProp)
                 endif
@@ -486,7 +572,7 @@ define class FoxStyleSheet as custom
                 lcClassStylesProp = textmerge('oStarClass<<toSelector.ControlEvent>>Styles')
                 if !pemstatus(toForm, lcClassProp, 5)
                     this.getAllControls(toForm, loClassCollection)
-                    =addproperty(toForm, lcClassProp, loClassCollection)
+                    this.AddTrackedProperty(toForm, lcClassProp, loClassCollection)
                 else
                     loClassCollection = evaluate('toForm.' + lcClassProp)
                 endif
@@ -544,6 +630,14 @@ define class FoxStyleSheet as custom
 
             case lower(lcCleanProp) == 'frametheme' and lower(toControl.baseclass) == 'form'
                 this.addTitleBar(toControl, this.EvalExpressionOptimized(lcValue))
+                loop
+
+            case inlist(lower(lcCleanProp), 'darktitlebar', 'titlebarcolor', 'titlebartextcolor') and lower(toControl.baseclass) == 'form'
+                this.SetTitleBar(toControl, lower(lcCleanProp), this.EvalExpressionOptimized(lcValue))
+                loop
+
+            case lower(lcCleanProp) == 'icon'
+                this.ApplyIcon(toControl, lcValue)
                 loop
 
             case lower(lcCleanProp) == 'picture' and lower(toControl.baseclass) == 'page'
@@ -887,14 +981,14 @@ define class FoxStyleSheet as custom
                 if !empty(tcClassStylesProp)
                     if type('this.oThisform') == 'O'
                         if !pemstatus(this.oThisform, tcClassStylesProp, 5)
-                            =addproperty(this.oThisform, tcClassStylesProp, toStyles)
+                            this.AddTrackedProperty(this.oThisform, tcClassStylesProp, toStyles)
                         else
                             this.oThisform. &tcClassStylesProp = toStyles
                         endif
                     endif
                 else
                     if !pemstatus(loControl, lcProp, 5)
-                        =addproperty(loControl, lcProp, .null.)
+                        this.AddTrackedProperty(loControl, lcProp, .null.)
                         loControl. &lcProp = toStyles
                     else
                         loStyles2 = evaluate("loControl." + lcProp)
@@ -959,6 +1053,10 @@ define class FoxStyleSheet as custom
                 this.ApplyEventStyles(loControl, laStyles[lnS])
             endif
         endfor
+        * an icon the theme did not draw follows the colours the event gave
+        if pemstatus(loControl, 'cAutoIcon', 5) and !empty(loControl.cAutoIcon)
+            this.ApplyIcon(loControl, '"' + loControl.cAutoIcon + '"')
+        endif
     endproc
 
     protected function FormStyles(tcProp)
@@ -1001,6 +1099,8 @@ define class FoxStyleSheet as custom
                     if type('lbResp') == 'L' and lbResp
                         this.popMenu()
                     endif
+                case lower(alltrim(lcProp)) == 'icon'
+                    this.ApplyIcon(toControl, lcValue)
                 otherwise
                     toControl. &lcProp = this.EvalExpressionOptimized(lcValue)
                 endcase
@@ -1189,6 +1289,214 @@ define class FoxStyleSheet as custom
         endif
         return llResult
     endfunc
+
+    *----------------------------------------------------------
+    * Icons: "sun" and "moon", drawn here as a BMP like DrawImage.
+    *----------------------------------------------------------
+    *-- icon = "sun" in a block: the control's Picture gets the icon, in its
+    *-- ForeColor over its BackColor, sized to the control. Set those two
+    *-- before icon in the block, and repeat icon in the event blocks that
+    *-- change them.
+    protected procedure ApplyIcon(toControl, tcValue)
+        local lcIcon, lnSize, lnColor, lnBack, lcFile, loEx
+        lcIcon = this.EvalExpressionOptimized(tcValue)
+        if vartype(lcIcon) != 'C'
+            lcIcon = tcValue
+        endif
+        lcIcon = lower(alltrim(chrtran(lcIcon, ['"], '')))
+        if !pemstatus(toControl, 'Picture', 5)
+            this.oLogger.LogWarning("icon: " + toControl.Name + " has no Picture")
+            return
+        endif
+        lnSize  = max(12, min(48, round(min(toControl.Height, toControl.Width) * 0.6, 0)))
+        lnColor = iif(pemstatus(toControl, 'ForeColor', 5), toControl.ForeColor, 0)
+        lnBack  = iif(pemstatus(toControl, 'BackColor', 5), toControl.BackColor, rgb(255, 255, 255))
+        * one file per icon, size and colours: VFP keeps a picture by its name
+        lcFile  = this.cPath + textmerge('icon_<<lcIcon>>_<<lnSize>>_<<lnColor>>_<<lnBack>>.bmp')
+        if !file(lcFile) and !this.DrawIcon(lcFile, lcIcon, lnSize, lnColor, lnBack)
+            return
+        endif
+        try
+            toControl.Picture = lcFile
+        catch to loEx
+            this.oLogger.LogFromException(loEx)
+        endtry
+    endproc
+
+    *-- FssThemeToggle shows the icon its theme gives it. Under a theme that
+    *-- does not know it (Word, black...) it shows a moon when the form is
+    *-- dark and a sun when it is light.
+    protected procedure ClearToggleIcons(toForm)
+        local loToggles, lcPath, loToggle
+        loToggles = createobject("Collection")
+        this.getControlsByClass(toForm, 'fssthemetoggle', loToggles)
+        for each lcPath in loToggles
+            loToggle = this.GetCachedControl(lcPath)
+            if type('loToggle') == 'O' and !isnull(loToggle)
+                loToggle.Picture = ''
+                loToggle.cAutoIcon = ''
+            endif
+        endfor
+    endproc
+
+    protected procedure RefreshToggleIcons(toForm)
+        local loToggles, lcPath, loToggle, lnBack, lnLight
+        loToggles = createobject("Collection")
+        this.getControlsByClass(toForm, 'fssthemetoggle', loToggles)
+        if loToggles.count = 0
+            return
+        endif
+        lnBack  = toForm.BackColor
+        lnLight = 0.299 * bitand(lnBack, 255) + 0.587 * bitand(bitrshift(lnBack, 8), 255) + 0.114 * bitand(bitrshift(lnBack, 16), 255)
+        for each lcPath in loToggles
+            loToggle = this.GetCachedControl(lcPath)
+            if type('loToggle') == 'O' and !isnull(loToggle) and empty(loToggle.Picture)
+                loToggle.cAutoIcon = iif(lnLight < 128, 'moon', 'sun')
+                this.ApplyIcon(loToggle, '"' + loToggle.cAutoIcon + '"')
+            endif
+        endfor
+    endproc
+
+    *-- Writes the icon tcIcon ("sun" or "moon") as a tnSize x tnSize 24-bit
+    *-- BMP, in tnColor over tnBackColor, with smooth edges (each pixel is
+    *-- sampled nine times). Returns .T. when the file is there.
+    function DrawIcon(tcOutput, tcIcon, tnSize, tnColor, tnBackColor)
+        local lcIcon, lnRowBytes, lcPixels, lcRow, lcBmp, lcSafety, llResult, loEx
+        local lnX, lnY, lnSX, lnSY, lnHits, lnA
+        local lnFR, lnFG, lnFB, lnBR, lnBG, lnBB
+
+        lcIcon = lower(alltrim(iif(vartype(tcIcon) == 'C', tcIcon, '')))
+        if !inlist(lcIcon, 'sun', 'moon')
+            this.oLogger.LogWarning("DrawIcon: unknown icon '" + lcIcon + "'. There are: sun, moon")
+            return .f.
+        endif
+        if vartype(tnSize) != 'N' or tnSize < 8 or tnSize > 256
+            this.oLogger.LogWarning("DrawIcon: the size goes from 8 to 256 pixels.")
+            return .f.
+        endif
+        tnSize = int(tnSize)
+        lnFR = bitand(tnColor, 255)
+        lnFG = bitand(bitrshift(tnColor, 8), 255)
+        lnFB = bitand(bitrshift(tnColor, 16), 255)
+        lnBR = bitand(tnBackColor, 255)
+        lnBG = bitand(bitrshift(tnBackColor, 8), 255)
+        lnBB = bitand(bitrshift(tnBackColor, 16), 255)
+
+        * the rows of a BMP go from the bottom up, padded to 4 bytes, as B, G, R
+        lnRowBytes = ceiling(tnSize * 3 / 4) * 4
+        lcPixels = ''
+        for lnY = tnSize - 1 to 0 step -1
+            lcRow = ''
+            for lnX = 0 to tnSize - 1
+                lnHits = 0
+                for lnSY = 1 to 3
+                    for lnSX = 1 to 3
+                        if this.IconCovers(lcIcon, (lnX + (lnSX - 0.5) / 3) / tnSize, (lnY + (lnSY - 0.5) / 3) / tnSize)
+                            lnHits = lnHits + 1
+                        endif
+                    endfor
+                endfor
+                lnA = lnHits / 9
+                lcRow = lcRow + chr(round(lnBB + (lnFB - lnBB) * lnA, 0)) + ;
+                                chr(round(lnBG + (lnFG - lnBG) * lnA, 0)) + ;
+                                chr(round(lnBR + (lnFR - lnBR) * lnA, 0))
+            endfor
+            lcPixels = lcPixels + lcRow + replicate(chr(0), lnRowBytes - tnSize * 3)
+        endfor
+        lcBmp = 'BM' + bintoc(54 + len(lcPixels), '4RS') + bintoc(0, '4RS') + bintoc(54, '4RS') + ;
+                bintoc(40, '4RS') + bintoc(tnSize, '4RS') + bintoc(tnSize, '4RS') + ;
+                bintoc(1, '2RS') + bintoc(24, '2RS') + bintoc(0, '4RS') + bintoc(len(lcPixels), '4RS') + ;
+                bintoc(2835, '4RS') + bintoc(2835, '4RS') + bintoc(0, '4RS') + bintoc(0, '4RS') + ;
+                lcPixels
+
+        lcSafety = set("Safety")
+        set safety off
+        llResult = .f.
+        try
+            llResult = strtofile(lcBmp, tcOutput) = len(lcBmp)
+        catch to loEx
+            this.oLogger.LogFromException(loEx)
+        endtry
+        set safety &lcSafety
+
+        if llResult
+            this.oImages.add(tcOutput)
+        endif
+        return llResult
+    endfunc
+
+    *-- Whether the point (tnU, tnV) of the icon, from 0 to 1 with V going
+    *-- down, is ink. The sun is a disc with eight rays; the moon, a disc
+    *-- with a bite taken from its upper right.
+    protected function IconCovers(tcIcon, tnU, tnV)
+        local lnDX, lnDY, lnR, lnAngle, lnRay
+        lnDX = tnU - 0.5
+        lnDY = tnV - 0.5
+        lnR  = sqrt(lnDX * lnDX + lnDY * lnDY)
+        if tcIcon == 'sun'
+            if lnR <= 0.21
+                return .t.
+            endif
+            if lnR < 0.30 or lnR > 0.47
+                return .f.
+            endif
+            lnAngle = atn2(lnDY, lnDX)
+            lnRay   = round(lnAngle / (pi() / 4), 0) * pi() / 4
+            return lnR * abs(sin(lnAngle - lnRay)) <= 0.055
+        endif
+        * moon
+        if lnR > 0.40
+            return .f.
+        endif
+        lnDX = tnU - 0.70
+        lnDY = tnV - 0.33
+        return sqrt(lnDX * lnDX + lnDY * lnDY) > 0.33
+    endfunc
+
+    *----------------------------------------------------------
+    * Title bar without Codejock: Windows draws it (DWM)
+    *----------------------------------------------------------
+    *-- darkTitleBar = .T. (Windows 10 2004 and later), titleBarColor and
+    *-- titleBarTextColor = rgb() (Windows 11; -1 gives the colour back to
+    *-- Windows). Only a top-level form has a title bar of its own: on a form
+    *-- inside _screen, and on older Windows, they do nothing.
+    protected procedure SetTitleBar(toForm, tcProperty, tvValue)
+        local lnValue, lnResult, loEx
+        if type('toForm.HWnd') != 'N' or toForm.HWnd = 0
+            return
+        endif
+        try
+            declare integer DwmSetWindowAttribute in dwmapi.dll as FssDwmSetWindowAttribute ;
+                integer hwnd, integer dwAttribute, integer @pvAttribute, integer cbAttribute
+            declare integer SetWindowPos in user32 as FssSetWindowPos ;
+                integer hWnd, integer hWndInsertAfter, integer x, integer y, integer cx, integer cy, integer uFlags
+            do case
+            case tcProperty == 'darktitlebar'
+                lnValue = iif(vartype(tvValue) == 'L' and tvValue, 1, 0)
+                lnResult = FssDwmSetWindowAttribute(toForm.HWnd, DWMWA_USE_IMMERSIVE_DARK_MODE, @lnValue, 4)
+                if lnResult != 0
+                    lnResult = FssDwmSetWindowAttribute(toForm.HWnd, DWMWA_USE_IMMERSIVE_DARK_MODE_OLD, @lnValue, 4)
+                endif
+            case vartype(tvValue) != 'N'
+                this.oLogger.LogWarning(tcProperty + " needs a colour, rgb(r, g, b), or -1")
+                return
+            case tcProperty == 'titlebarcolor'
+                lnValue = iif(tvValue < 0, -1, tvValue)
+                lnResult = FssDwmSetWindowAttribute(toForm.HWnd, DWMWA_CAPTION_COLOR, @lnValue, 4)
+            otherwise
+                lnValue = iif(tvValue < 0, -1, tvValue)
+                lnResult = FssDwmSetWindowAttribute(toForm.HWnd, DWMWA_TEXT_COLOR, @lnValue, 4)
+            endcase
+            * SWP_NOSIZE + SWP_NOMOVE + SWP_NOZORDER + SWP_FRAMECHANGED: repaint the frame now
+            =FssSetWindowPos(toForm.HWnd, 0, 0, 0, 0, 0, 0x27)
+            this.lTitleBarSet = .t.
+            if lnResult != 0
+                this.oLogger.LogDebug(tcProperty + ": Windows did not take it (" + transform(lnResult, '@0') + ")")
+            endif
+        catch to loEx
+            this.oLogger.LogDebug(tcProperty + ": " + loEx.Message)
+        endtry
+    endproc
 
     *----------------------------------------------------------
     * Edit context menu
@@ -1591,6 +1899,108 @@ define class FssCustomTitleBar as custom
     endproc
 enddefine
 
+
+*==============================================================
+* CLASS: FssThemeToggle
+* A button that switches the form between two themes, "light" and
+* "dark" unless you say otherwise. The themes draw it: the built-in
+* light and dark give it a sun and a moon (icon = "sun").
+*
+*   ThisForm.NewObject("cmdTheme", "FssThemeToggle", "foxstylesheet.prg")
+*
+* Click links the other theme with the engine already on the form (or a
+* new one), and then calls ThemeChanged(cTheme): bind to it, or subclass
+* it, to save the choice of the user.
+*==============================================================
+define class FssThemeToggle as CommandButton
+    Caption         = ""
+    Width           = 32
+    Height          = 32
+    PicturePosition = 13
+    ToolTipText     = "Switch between the light and the dark theme"
+    cLightTheme     = "light"
+    cDarkTheme      = "dark"
+    * the icon link() chose because the theme did not draw one
+    cAutoIcon       = ""
+
+    procedure Click
+        this.Toggle()
+    endproc
+
+    * Links the other theme. Returns the one it linked.
+    function Toggle
+        local loFss, lcTheme
+        loFss = FssEngineOf(thisform)
+        if isnull(loFss)
+            loFss = createobject("FoxStyleSheet")
+        endif
+        lcTheme = iif(lower(juststem(loFss.cTheme)) == lower(juststem(this.cDarkTheme)), this.cLightTheme, this.cDarkTheme)
+        loFss.link(lcTheme, thisform)
+        this.ThemeChanged(lcTheme)
+        return lcTheme
+    endfunc
+
+    * Called after every switch, with the theme now on the form
+    procedure ThemeChanged(tcTheme)
+    endproc
+enddefine
+
+
+*==============================================================
+* FssEngineOf(oForm): the FoxStyleSheet engine that link() hung from the
+* form, or .NULL. when no theme was linked to it.
+*==============================================================
+FUNCTION FssEngineOf
+    LPARAMETERS toForm
+    LOCAL laMembers[1], lnI, loEngine
+    loEngine = .null.
+    IF VARTYPE(toForm) != 'O'
+        RETURN loEngine
+    ENDIF
+    FOR lnI = 1 TO AMEMBERS(laMembers, toForm, 0)
+        IF UPPER(LEFT(laMembers[lnI], LEN(FSS_ENGINE_PROPERTY))) == UPPER(FSS_ENGINE_PROPERTY) ;
+                AND TYPE('toForm.' + laMembers[lnI]) == 'O'
+            loEngine = EVALUATE('toForm.' + laMembers[lnI])
+            IF !ISNULL(loEngine)
+                EXIT
+            ENDIF
+        ENDIF
+    ENDFOR
+    RETURN loEngine
+ENDFUNC
+
+
+*==============================================================
+* FssSystemTheme(): "dark" when Windows is set to dark mode for
+* applications, "light" otherwise (and on Windows without the setting).
+*   loFss.link(FssSystemTheme(), ThisForm)
+*==============================================================
+FUNCTION FssSystemTheme
+    LOCAL lnKey, lnType, lnValue, lnSize, lcTheme
+    lcTheme = "light"
+    TRY
+        DECLARE INTEGER RegOpenKeyEx IN advapi32 AS FssRegOpenKeyEx ;
+            INTEGER hKey, STRING lpSubKey, INTEGER ulOptions, INTEGER samDesired, INTEGER @phkResult
+        DECLARE INTEGER RegQueryValueEx IN advapi32 AS FssRegQueryValueEx ;
+            INTEGER hKey, STRING lpValueName, INTEGER lpReserved, INTEGER @lpType, INTEGER @lpData, INTEGER @lpcbData
+        DECLARE INTEGER RegCloseKey IN advapi32 AS FssRegCloseKey INTEGER hKey
+        lnKey = 0
+        * HKEY_CURRENT_USER, KEY_READ
+        IF FssRegOpenKeyEx(-2147483647, "Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", 0, 131097, @lnKey) = 0
+            lnType  = 0
+            lnValue = 1
+            lnSize  = 4
+            IF FssRegQueryValueEx(lnKey, "AppsUseLightTheme", 0, @lnType, @lnValue, @lnSize) = 0 AND lnValue = 0
+                lcTheme = "dark"
+            ENDIF
+            =FssRegCloseKey(lnKey)
+        ENDIF
+    CATCH
+        lcTheme = "light"
+    ENDTRY
+    RETURN lcTheme
+ENDFUNC
+
 *==============================================================
 *-- BEGIN BUILT-IN THEMES
 *-- Generated by tools\build-themes.ps1 from themes\*.fss: do not edit by hand,
@@ -1978,6 +2388,206 @@ Grid {
 }
 
         ENDTEXT
+    CASE LOWER(tcName) == "dark"
+        TEXT TO lcTheme NOSHOW
+/* FoxStyleSheet - Dark: the dark twin of light.fss, in Segoe UI.
+   Its twin is light.fss: the two set the same properties, so a form can
+   go from one to the other with FssThemeToggle. Change both together. */
+
+_res_ {
+    white           = rgb(255, 255, 255)
+    accent          = rgb(76, 160, 240)
+    accentText      = rgb(16, 16, 16)
+    surface         = rgb(32, 32, 32)
+    surfaceAlt      = rgb(45, 45, 45)
+    button          = rgb(58, 58, 58)
+    surfaceHover    = rgb(58, 58, 58)
+    card            = rgb(39, 39, 39)
+    textPrimary     = rgb(240, 240, 240)
+    textSecondary   = rgb(190, 190, 190)
+    border          = rgb(72, 72, 72)
+    borderFocus     = $accent
+    focus           = rgb(52, 52, 52)
+    selection       = rgb(0, 84, 153)
+    selectionText   = rgb(255, 255, 255)
+    disabled        = rgb(40, 40, 40)
+    disabledText    = rgb(110, 110, 110)
+    header          = rgb(55, 55, 55)
+    headerText      = $textPrimary
+    iconColor       = rgb(196, 214, 255)
+    font            = "Segoe UI"
+}
+
+form {
+    backColor           = $surface
+    darkTitleBar        = .t.
+    titleBarColor       = $surface
+    titleBarTextColor   = $textPrimary
+}
+
+EditBox, TextBox, Spinner {
+    backColor           = $surfaceAlt
+    foreColor           = $textPrimary
+    borderColor         = $border
+    borderStyle         = 1
+    selectedBackColor   = $selection
+    selectedForeColor   = $selectionText
+    disabledBackColor   = $disabled
+    disabledForeColor   = $disabledText
+    fontName            = $font
+    specialEffect       = 1
+}
+
+EditBox.onGotFocus, TextBox.onGotFocus, ComboBox.onGotFocus, Spinner.onGotFocus {
+    borderColor = $borderFocus
+    backColor   = $focus
+}
+
+EditBox.onLostFocus, TextBox.onLostFocus, ComboBox.onLostFocus, Spinner.onLostFocus {
+    borderColor = $border
+    backColor   = $surfaceAlt
+}
+
+TextBox.onRightClick, EditBox.onRightClick {
+    editMenu = .t.
+}
+
+ComboBox {
+    backColor               = $surfaceAlt
+    foreColor               = $textPrimary
+    borderColor             = $border
+    borderStyle             = 1
+    selectedBackColor       = $selection
+    selectedForeColor       = $selectionText
+    selectedItemBackColor   = $selection
+    selectedItemForeColor   = $selectionText
+    itemBackColor           = $surfaceAlt
+    itemForeColor           = $textPrimary
+    disabledBackColor       = $disabled
+    disabledForeColor       = $disabledText
+    fontName                = $font
+    specialEffect           = 1
+}
+
+ListBox {
+    borderColor             = $border
+    borderStyle             = 1
+    selectedItemBackColor   = $selection
+    selectedItemForeColor   = $selectionText
+    itemBackColor           = $surfaceAlt
+    itemForeColor           = $textPrimary
+    fontName                = $font
+    specialEffect           = 1
+}
+
+CheckBox, OptionButton {
+    foreColor   = $textPrimary
+    fontName    = $font
+    backStyle   = 0
+}
+
+OptionGroup {
+    borderStyle = 0
+    backStyle   = 0
+}
+
+CommandButton {
+    backColor       = $button
+    foreColor       = $textPrimary
+    fontName        = $font
+    themes          = .f.
+    specialEffect   = 1
+    mousePointer    = 15
+}
+
+CommandButton.onMouseEnter {
+    backColor   = $accent
+    foreColor   = $accentText
+}
+
+CommandButton.onMouseLeave {
+    backColor   = $button
+    foreColor   = $textPrimary
+}
+
+FssThemeToggle {
+    backColor   = $surface
+    foreColor   = $iconColor
+    icon        = "moon"
+}
+
+FssThemeToggle.onMouseEnter {
+    backColor   = $surfaceHover
+    foreColor   = $iconColor
+    icon        = "moon"
+}
+
+FssThemeToggle.onMouseLeave {
+    backColor   = $surface
+    foreColor   = $iconColor
+    icon        = "moon"
+}
+
+Label {
+    foreColor   = $textSecondary
+    fontName    = $font
+    backStyle   = 0
+}
+
+Container {
+    backColor       = $card
+    borderColor     = $border
+    borderWidth     = 1
+    specialEffect   = 2
+}
+
+Shape {
+    backColor       = $card
+    borderColor     = $border
+    specialEffect   = 1
+}
+
+Line {
+    borderColor = $border
+}
+
+PageFrame {
+    themes  = .f.
+}
+
+Page {
+    backColor   = $card
+    foreColor   = $textPrimary
+    fontName    = $font
+}
+
+Grid {
+    backColor           = $surfaceAlt
+    foreColor           = $textPrimary
+    gridLineColor       = $border
+    highlightStyle      = 2
+    highlightBackColor  = $selection
+    highlightForeColor  = $selectionText
+    deleteMark          = .f.
+    recordMark          = .f.
+    headerHeight        = 28
+    fontName            = $font
+    themes              = .f.
+}
+
+Column {
+    backColor   = $surfaceAlt
+    foreColor   = $textPrimary
+}
+
+Header {
+    backColor   = $header
+    foreColor   = $headerText
+    fontName    = $font
+    fontBold    = .t.
+}
+
+        ENDTEXT
     CASE LOWER(tcName) == "excel"
         TEXT TO lcTheme NOSHOW
 /* FoxStyleSheet - Excel (Fresh Green) */
@@ -2163,6 +2773,206 @@ Grid {
     recordMark          = .f.
     themes              = .f.
     gridLineColor       = $border
+}
+
+        ENDTEXT
+    CASE LOWER(tcName) == "light"
+        TEXT TO lcTheme NOSHOW
+/* FoxStyleSheet - Light: a clean light theme in Segoe UI.
+   Its twin is dark.fss: the two set the same properties, so a form can
+   go from one to the other with FssThemeToggle. Change both together. */
+
+_res_ {
+    white           = rgb(255, 255, 255)
+    accent          = rgb(0, 95, 184)
+    accentText      = rgb(255, 255, 255)
+    surface         = rgb(243, 243, 243)
+    surfaceAlt      = rgb(255, 255, 255)
+    button          = rgb(229, 229, 229)
+    surfaceHover    = rgb(229, 229, 229)
+    card            = rgb(251, 251, 251)
+    textPrimary     = rgb(27, 27, 27)
+    textSecondary   = rgb(92, 92, 92)
+    border          = rgb(209, 209, 209)
+    borderFocus     = $accent
+    focus           = rgb(255, 255, 255)
+    selection       = rgb(204, 228, 247)
+    selectionText   = rgb(0, 0, 0)
+    disabled        = rgb(245, 245, 245)
+    disabledText    = rgb(160, 160, 160)
+    header          = rgb(235, 235, 235)
+    headerText      = $textPrimary
+    iconColor       = rgb(222, 145, 0)
+    font            = "Segoe UI"
+}
+
+form {
+    backColor           = $surface
+    darkTitleBar        = .f.
+    titleBarColor       = $surface
+    titleBarTextColor   = $textPrimary
+}
+
+EditBox, TextBox, Spinner {
+    backColor           = $surfaceAlt
+    foreColor           = $textPrimary
+    borderColor         = $border
+    borderStyle         = 1
+    selectedBackColor   = $selection
+    selectedForeColor   = $selectionText
+    disabledBackColor   = $disabled
+    disabledForeColor   = $disabledText
+    fontName            = $font
+    specialEffect       = 1
+}
+
+EditBox.onGotFocus, TextBox.onGotFocus, ComboBox.onGotFocus, Spinner.onGotFocus {
+    borderColor = $borderFocus
+    backColor   = $focus
+}
+
+EditBox.onLostFocus, TextBox.onLostFocus, ComboBox.onLostFocus, Spinner.onLostFocus {
+    borderColor = $border
+    backColor   = $surfaceAlt
+}
+
+TextBox.onRightClick, EditBox.onRightClick {
+    editMenu = .t.
+}
+
+ComboBox {
+    backColor               = $surfaceAlt
+    foreColor               = $textPrimary
+    borderColor             = $border
+    borderStyle             = 1
+    selectedBackColor       = $selection
+    selectedForeColor       = $selectionText
+    selectedItemBackColor   = $selection
+    selectedItemForeColor   = $selectionText
+    itemBackColor           = $surfaceAlt
+    itemForeColor           = $textPrimary
+    disabledBackColor       = $disabled
+    disabledForeColor       = $disabledText
+    fontName                = $font
+    specialEffect           = 1
+}
+
+ListBox {
+    borderColor             = $border
+    borderStyle             = 1
+    selectedItemBackColor   = $selection
+    selectedItemForeColor   = $selectionText
+    itemBackColor           = $surfaceAlt
+    itemForeColor           = $textPrimary
+    fontName                = $font
+    specialEffect           = 1
+}
+
+CheckBox, OptionButton {
+    foreColor   = $textPrimary
+    fontName    = $font
+    backStyle   = 0
+}
+
+OptionGroup {
+    borderStyle = 0
+    backStyle   = 0
+}
+
+CommandButton {
+    backColor       = $button
+    foreColor       = $textPrimary
+    fontName        = $font
+    themes          = .f.
+    specialEffect   = 1
+    mousePointer    = 15
+}
+
+CommandButton.onMouseEnter {
+    backColor   = $accent
+    foreColor   = $accentText
+}
+
+CommandButton.onMouseLeave {
+    backColor   = $button
+    foreColor   = $textPrimary
+}
+
+FssThemeToggle {
+    backColor   = $surface
+    foreColor   = $iconColor
+    icon        = "sun"
+}
+
+FssThemeToggle.onMouseEnter {
+    backColor   = $surfaceHover
+    foreColor   = $iconColor
+    icon        = "sun"
+}
+
+FssThemeToggle.onMouseLeave {
+    backColor   = $surface
+    foreColor   = $iconColor
+    icon        = "sun"
+}
+
+Label {
+    foreColor   = $textSecondary
+    fontName    = $font
+    backStyle   = 0
+}
+
+Container {
+    backColor       = $card
+    borderColor     = $border
+    borderWidth     = 1
+    specialEffect   = 2
+}
+
+Shape {
+    backColor       = $card
+    borderColor     = $border
+    specialEffect   = 1
+}
+
+Line {
+    borderColor = $border
+}
+
+PageFrame {
+    themes  = .f.
+}
+
+Page {
+    backColor   = $card
+    foreColor   = $textPrimary
+    fontName    = $font
+}
+
+Grid {
+    backColor           = $surfaceAlt
+    foreColor           = $textPrimary
+    gridLineColor       = $border
+    highlightStyle      = 2
+    highlightBackColor  = $selection
+    highlightForeColor  = $selectionText
+    deleteMark          = .f.
+    recordMark          = .f.
+    headerHeight        = 28
+    fontName            = $font
+    themes              = .f.
+}
+
+Column {
+    backColor   = $surfaceAlt
+    foreColor   = $textPrimary
+}
+
+Header {
+    backColor   = $header
+    foreColor   = $headerText
+    fontName    = $font
+    fontBold    = .t.
 }
 
         ENDTEXT
@@ -4256,6 +5066,6 @@ Grid {
 ENDFUNC
 
 FUNCTION FssBuiltInThemeNames
-    RETURN "Access,black,Excel,neon,office-word-dark,office-word-light,OneNote,Outlook,Powerpoint,Publisher,white,white2,windev1,Word"
+    RETURN "Access,black,dark,Excel,light,neon,office-word-dark,office-word-light,OneNote,Outlook,Powerpoint,Publisher,white,white2,windev1,Word"
 ENDFUNC
 *-- END BUILT-IN THEMES

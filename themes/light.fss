@@ -1,0 +1,196 @@
+/* FoxStyleSheet - Light: a clean light theme in Segoe UI.
+   Its twin is dark.fss: the two set the same properties, so a form can
+   go from one to the other with FssThemeToggle. Change both together. */
+
+_res_ {
+    white           = rgb(255, 255, 255)
+    accent          = rgb(0, 95, 184)
+    accentText      = rgb(255, 255, 255)
+    surface         = rgb(243, 243, 243)
+    surfaceAlt      = rgb(255, 255, 255)
+    button          = rgb(229, 229, 229)
+    surfaceHover    = rgb(229, 229, 229)
+    card            = rgb(251, 251, 251)
+    textPrimary     = rgb(27, 27, 27)
+    textSecondary   = rgb(92, 92, 92)
+    border          = rgb(209, 209, 209)
+    borderFocus     = $accent
+    focus           = rgb(255, 255, 255)
+    selection       = rgb(204, 228, 247)
+    selectionText   = rgb(0, 0, 0)
+    disabled        = rgb(245, 245, 245)
+    disabledText    = rgb(160, 160, 160)
+    header          = rgb(235, 235, 235)
+    headerText      = $textPrimary
+    iconColor       = rgb(222, 145, 0)
+    font            = "Segoe UI"
+}
+
+form {
+    backColor           = $surface
+    darkTitleBar        = .f.
+    titleBarColor       = $surface
+    titleBarTextColor   = $textPrimary
+}
+
+EditBox, TextBox, Spinner {
+    backColor           = $surfaceAlt
+    foreColor           = $textPrimary
+    borderColor         = $border
+    borderStyle         = 1
+    selectedBackColor   = $selection
+    selectedForeColor   = $selectionText
+    disabledBackColor   = $disabled
+    disabledForeColor   = $disabledText
+    fontName            = $font
+    specialEffect       = 1
+}
+
+EditBox.onGotFocus, TextBox.onGotFocus, ComboBox.onGotFocus, Spinner.onGotFocus {
+    borderColor = $borderFocus
+    backColor   = $focus
+}
+
+EditBox.onLostFocus, TextBox.onLostFocus, ComboBox.onLostFocus, Spinner.onLostFocus {
+    borderColor = $border
+    backColor   = $surfaceAlt
+}
+
+TextBox.onRightClick, EditBox.onRightClick {
+    editMenu = .t.
+}
+
+ComboBox {
+    backColor               = $surfaceAlt
+    foreColor               = $textPrimary
+    borderColor             = $border
+    borderStyle             = 1
+    selectedBackColor       = $selection
+    selectedForeColor       = $selectionText
+    selectedItemBackColor   = $selection
+    selectedItemForeColor   = $selectionText
+    itemBackColor           = $surfaceAlt
+    itemForeColor           = $textPrimary
+    disabledBackColor       = $disabled
+    disabledForeColor       = $disabledText
+    fontName                = $font
+    specialEffect           = 1
+}
+
+ListBox {
+    borderColor             = $border
+    borderStyle             = 1
+    selectedItemBackColor   = $selection
+    selectedItemForeColor   = $selectionText
+    itemBackColor           = $surfaceAlt
+    itemForeColor           = $textPrimary
+    fontName                = $font
+    specialEffect           = 1
+}
+
+CheckBox, OptionButton {
+    foreColor   = $textPrimary
+    fontName    = $font
+    backStyle   = 0
+}
+
+OptionGroup {
+    borderStyle = 0
+    backStyle   = 0
+}
+
+CommandButton {
+    backColor       = $button
+    foreColor       = $textPrimary
+    fontName        = $font
+    themes          = .f.
+    specialEffect   = 1
+    mousePointer    = 15
+}
+
+CommandButton.onMouseEnter {
+    backColor   = $accent
+    foreColor   = $accentText
+}
+
+CommandButton.onMouseLeave {
+    backColor   = $button
+    foreColor   = $textPrimary
+}
+
+FssThemeToggle {
+    backColor   = $surface
+    foreColor   = $iconColor
+    icon        = "sun"
+}
+
+FssThemeToggle.onMouseEnter {
+    backColor   = $surfaceHover
+    foreColor   = $iconColor
+    icon        = "sun"
+}
+
+FssThemeToggle.onMouseLeave {
+    backColor   = $surface
+    foreColor   = $iconColor
+    icon        = "sun"
+}
+
+Label {
+    foreColor   = $textSecondary
+    fontName    = $font
+    backStyle   = 0
+}
+
+Container {
+    backColor       = $card
+    borderColor     = $border
+    borderWidth     = 1
+    specialEffect   = 2
+}
+
+Shape {
+    backColor       = $card
+    borderColor     = $border
+    specialEffect   = 1
+}
+
+Line {
+    borderColor = $border
+}
+
+PageFrame {
+    themes  = .f.
+}
+
+Page {
+    backColor   = $card
+    foreColor   = $textPrimary
+    fontName    = $font
+}
+
+Grid {
+    backColor           = $surfaceAlt
+    foreColor           = $textPrimary
+    gridLineColor       = $border
+    highlightStyle      = 2
+    highlightBackColor  = $selection
+    highlightForeColor  = $selectionText
+    deleteMark          = .f.
+    recordMark          = .f.
+    headerHeight        = 28
+    fontName            = $font
+    themes              = .f.
+}
+
+Column {
+    backColor   = $surfaceAlt
+    foreColor   = $textPrimary
+}
+
+Header {
+    backColor   = $header
+    foreColor   = $headerText
+    fontName    = $font
+    fontBold    = .t.
+}

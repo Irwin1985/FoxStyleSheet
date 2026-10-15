@@ -3,18 +3,26 @@
 Style sheets for Visual FoxPro 9 forms. A theme written like CSS (`.fss`) sets the colours,
 fonts and behaviour of every control of a form in one call, without touching the form: by
 base class, by your own class, by control name, and on events such as focus or mouse over.
-Fourteen themes come built in. One `.prg`, no dependencies.
+Sixteen themes come built in, among them a light and a dark one that the user switches with
+a sun and moon button. One `.prg`, no dependencies.
+
+| `light` | `dark` |
+|---|---|
+| ![The showcase with the light theme](docs/images/showcase-light.png) | ![The showcase with the dark theme](docs/images/showcase-dark.png) |
 
 ## Install
 
-Copy `foxstylesheet.prg` into your project, and load it:
+```
+foxpack add foxstylesheet
+```
 
 ```foxpro
 SET PROCEDURE TO foxstylesheet.prg ADDITIVE
 ```
 
-That is all. The built-in themes are inside the `.prg`. The Codejock title bar
-(`frameTheme`) is optional and needs your own Codejock licence: see API, Codejock.
+Without FoxPack, copy `foxstylesheet.prg` into your project. The built-in themes are inside
+the `.prg`. The Codejock title bar (`frameTheme`) is optional and needs your own Codejock
+licence: see API, Codejock.
 
 ## Example
 
@@ -36,7 +44,29 @@ DO foxstylesheet.prg WITH "Word", ThisForm
 The engine keeps itself alive on the form, so a `LOCAL` is enough: the event styles keep
 working after `Init` ends.
 
-A theme of your own, in a file or in a string:
+### Light and dark, as Windows is
+
+```foxpro
+SET PROCEDURE TO foxstylesheet.prg ADDITIVE
+ThisForm.AddObject("cmdTheme", "FssThemeToggle")
+ThisForm.cmdTheme.Left = ThisForm.Width - 44
+ThisForm.cmdTheme.Top = 12
+ThisForm.cmdTheme.Visible = .T.
+
+LOCAL loFss
+loFss = CREATEOBJECT("FoxStyleSheet")
+loFss.link(FssSystemTheme(), ThisForm)
+```
+
+`FssSystemTheme()` says whether Windows uses the light or the dark mode for applications. The
+button shows a sun with the light theme and a moon with the dark one, and a click switches the
+form to the other. On a top-level form (`ShowWindow = 2`) the title bar follows the theme too.
+
+`examples\showcase` is a complete application with one screen: the two themes, the button, a
+combo with every built-in theme, the choice of the user saved between runs, and
+[VFPStretch](https://github.com/Irwin1985/VFPStretch) to stretch it with the window.
+
+### A theme of your own, in a file or in a string
 
 ```css
 /* my-theme.fss */
@@ -78,6 +108,8 @@ TextBox.onLostFocus {
 loFss.link("themes\my-theme.fss", ThisForm)
 ```
 
+To start from a built-in theme, `FssBuiltInTheme("light")` returns its text.
+
 ## The FSS format
 
 A theme is a list of blocks `selector { property = value }`. Comments are `/* ... */`.
@@ -94,7 +126,8 @@ A theme is a list of blocks `selector { property = value }`. Comments are `/* ..
 | `.txtName.onGotFocus`, `*.onGotFocus` | A named control, or every control, when the event fires |
 
 When several event blocks apply to a control, they run from the least to the most specific:
-`*`, the base class, the own class, the name.
+`*`, the base class, the own class, the name. Static blocks are applied in the order of the
+file.
 
 **Values are VFP expressions**: `rgb(43, 87, 154)`, `.T.`, `12`, `"Segoe UI"`. Each one is
 evaluated with `EVALUATE()` when it is applied.
@@ -108,6 +141,10 @@ A variable may name another one (`borderFocus = $accent`).
 |---|---|---|
 | `_ = <VFP code>` | Any block | Runs the line. `this` is the control and `thisform` the form. Repeat `_` for several lines |
 | `_ = $name` | Event blocks | Runs the theme function `name` (see below) |
+| `icon = "sun"` | Any control with `Picture` | Draws the icon (`"sun"` or `"moon"`) in the control's `ForeColor` over its `BackColor`, sized to the control. Set those two first in the block |
+| `darkTitleBar = .T.` | `form` | Windows paints the title bar dark (Windows 10 2004 and later) |
+| `titleBarColor = rgb(r, g, b)` | `form` | The colour of the title bar (Windows 11); `-1` gives it back to Windows |
+| `titleBarTextColor = rgb(r, g, b)` | `form` | The colour of the caption (Windows 11); `-1` gives it back to Windows |
 | `picture = rgb(r, g, b)` | `page` | A solid page background, even with themed tabs |
 | `frameTheme = "Word"` | `form` | The Codejock title bar with that colour scheme: `word`, `excel`, `access`, `powerpoint`, `publisher`, `onenote`, `outlook`, `red`, `gold`, `gray`, `black`, `white` |
 | `editMenu = .T.` | Event blocks (`TextBox.onRightClick`) | Opens the edit menu: Undo, Redo, Cut, Copy, Paste, Paste Special, Clear, Select All |
@@ -119,10 +156,14 @@ runs with `_ = $name`. Inside it, `this` is the control and `thisform` is the ac
 
 ### Built-in themes
 
-`Access`, `black`, `Excel`, `neon`, `office-word-dark`, `office-word-light`, `OneNote`,
-`Outlook`, `Powerpoint`, `Publisher`, `white`, `white2`, `windev1`, `Word`.
+`Access`, `black`, `dark`, `Excel`, `light`, `neon`, `office-word-dark`, `office-word-light`,
+`OneNote`, `Outlook`, `Powerpoint`, `Publisher`, `white`, `white2`, `windev1`, `Word`.
 `FssBuiltInThemeNames()` returns them as a comma-separated list, and `FssBuiltInTheme(cName)`
 returns the text of one, to start a theme of your own from it.
+
+`light` and `dark` are twins: they set the same properties with different values, so a form
+goes from one to the other and back without leftovers. Both are in Segoe UI, draw the
+`FssThemeToggle` button and paint the title bar.
 
 ### FoxStyleSheet.link(cTheme, oForm)
 
@@ -133,6 +174,47 @@ failed. It never raises: what failed is in `nErrors`, `oErrors` and `cLastError`
 ```foxpro
 IF !loFss.link("themes\my-theme.fss", ThisForm)
 	? loFss.cLastError
+ENDIF
+```
+
+Calling `link()` again on the same engine changes the theme of a form that is already on
+screen: the event styles, functions and variables of the old theme go away, and the title bar
+goes back to the colours of Windows before the new theme paints it. `cTheme` keeps the theme
+of the last `link()`, as it was given.
+
+### FssThemeToggle
+
+A `CommandButton` (32 x 32, no caption) that switches its form between two themes.
+
+```foxpro
+ThisForm.AddObject("cmdTheme", "FssThemeToggle")
+* or, without SET PROCEDURE: ThisForm.NewObject("cmdTheme", "FssThemeToggle", "foxstylesheet.prg")
+```
+
+| Member | What it does |
+|---|---|
+| `cLightTheme`, `cDarkTheme` | The two themes, `"light"` and `"dark"` by default. Any pair works: `"office-word-light"` and `"office-word-dark"`, or two `.fss` files |
+| `Click()` | Calls `Toggle()` |
+| `Toggle()` | Links the other theme, with the engine already on the form or a new one, and returns its name |
+| `ThemeChanged(cTheme)` | Called after every switch. Empty: bind to it with `BINDEVENT()`, or subclass, to save the choice of the user |
+
+`light` and `dark` draw its icon. Under a theme that does not know it, it shows a moon when
+the form is dark and a sun when it is light.
+
+### FssSystemTheme()
+
+Returns `"dark"` when Windows is set to the dark mode for applications, and `"light"`
+otherwise, also on a Windows without the setting.
+
+### FssEngineOf(oForm)
+
+Returns the engine that `link()` hung from the form, or `.NULL.` when no theme was linked to it.
+
+```foxpro
+LOCAL loFss
+loFss = FssEngineOf(ThisForm)
+IF !ISNULL(loFss)
+	loFss.link("dark", ThisForm)
 ENDIF
 ```
 
@@ -152,7 +234,8 @@ rest of the theme is applied), and an error when the block is an event block.
 
 `frameTheme` uses Codejock SkinFramework, which is commercial: FoxStyleSheet does not ship
 it. If it is registered on the machine, the title bar is painted; if it is not, `frameTheme`
-is skipped and everything else works.
+is skipped and everything else works. Without Codejock, `darkTitleBar` and `titleBarColor`
+paint the title bar of a top-level form with what Windows itself offers.
 
 | Property | Default |
 |---|---|
@@ -172,11 +255,13 @@ loFss.link("Word", ThisForm)
 
 | Member | What it does |
 |---|---|
-| `cVersion` | `"2.1.0"` |
+| `cVersion` | `"2.2.0"` |
+| `cTheme` | The theme of the last `link()` |
 | `cPrgPath` | The folder of `foxstylesheet.prg` |
-| `cPath` | `%APPDATA%\FoxStyleSheet\`: the log and the page background images |
+| `cPath` | `%APPDATA%\FoxStyleSheet\`: the log, the page backgrounds and the icons |
 | `GetPerformanceReport()` | Styles, controls and times of the last `link()` |
 | `DrawImage(cFile, nWidth, nHeight, nRed, nGreen, nBlue)` | Writes a solid-colour BMP; `.T.` or `.F.` |
+| `DrawIcon(cFile, cIcon, nSize, nColor, nBackColor)` | Writes the icon `"sun"` or `"moon"` as a BMP of `nSize` x `nSize` pixels (8 to 256), with smooth edges; `.T.` or `.F.` |
 | `IsDrawingAvailable()` | Always `.T.` (kept from 2.0) |
 | `LogInfo/LogWarning/LogError/LogDebug(cText)` | Write to the log |
 
@@ -192,6 +277,18 @@ the routine messages) and `nMaxLogBytes` (`0` means no cap).
 - **A theme is code.** Every value goes through `EVALUATE()`, and `_` runs any VFP line.
   A `.fss` from an unknown source can do anything your application can: load only themes
   you trust.
+- **A theme only changes what it names.** Switching from a theme that sets `fontBold` on a
+  control to one that does not leaves it bold. Themes meant to be switched set the same
+  properties, as `light` and `dark` do: if you change one, change its twin, and
+  `Test_LightAndDarkSetTheSameProperties` checks it.
+- **Windows draws some parts itself.** Scroll bars, the arrows of a Spinner and the button
+  of a ComboBox stay light under the `dark` theme.
+- **The title bar needs a window of its own.** `darkTitleBar` and `titleBarColor` work on a
+  top-level form (`ShowWindow = 2`); a form inside `_Screen` keeps the frame of VFP. The
+  caption colours need Windows 11.
+- **`icon` takes the colours the control has when it is applied.** Put `foreColor` and
+  `backColor` before `icon` in the block, and repeat `icon` in the event blocks that change
+  them, as `light` and `dark` do on `FssThemeToggle.onMouseEnter`.
 - **An event block changes the control, and nothing changes it back.** Pair
   `onGotFocus` with `onLostFocus`, and `onMouseEnter` with `onMouseLeave`, as the built-in
   themes do.
@@ -204,9 +301,11 @@ the routine messages) and `nMaxLogBytes` (`0` means no cap).
   value is used instead. Write `fontName = "Arial"`.
 - **`*` without an event uses `SetAll`**: it reaches every control, including those you did
   not mean. Prefer class selectors.
-- **Page backgrounds are files.** Each `picture = rgb()` writes a BMP into
-  `%APPDATA%\FoxStyleSheet\`; they are deleted when the engine is destroyed (when the form
-  closes).
+- **Page backgrounds and icons are files.** They are written into `%APPDATA%\FoxStyleSheet\`
+  and deleted when the engine is destroyed (when the form closes).
+- **With VFPStretch, link the theme first.** A theme can set sizes (`headerHeight` of a grid);
+  VFPStretch has to take the form after that, and stretch it again after a switch, as the
+  showcase does.
 
 ## Built-in themes from the .fss files
 
@@ -221,4 +320,20 @@ From the repository folder:
 ```
 foxproof run --prg tests\FoxStyleSheetTests.prg
 foxproof run --prg tests\FoxStyleSheetRegressionTests.prg
+foxproof run --prg tests\FoxStyleSheetThemeTests.prg
 ```
+
+## History
+
+- **2.2.0** (2026-10-15). The `light` and `dark` themes, `FssThemeToggle` with its sun and
+  moon, and `FssSystemTheme()`. A second `link()` changes the theme of a form on screen
+  without leftovers. The `icon` property and `DrawIcon()`. The title bar without Codejock:
+  `darkTitleBar`, `titleBarColor`, `titleBarTextColor`. `cTheme` and `FssEngineOf()`. A
+  showcase application in `examples\showcase`. MIT license.
+- **2.1.0** (2026-10-03). Built-in themes inside the `.prg`, a parser of its own without
+  `VBScript.RegExp`, page backgrounds without `System.app`, Codejock optional.
+- **2.0.0** (2026-05-09). Selectors by class, name and event.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
