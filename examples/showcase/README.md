@@ -13,11 +13,11 @@ no colours: change the theme and the same screen looks different.
 
 ## Run it
 
-The two libraries come with FoxPack, into `lib\`:
+The two libraries come with FoxPack: `foxpack.lock` fixes their versions, and this puts
+them in `lib\`:
 
 ```
-foxpack add foxstylesheet
-foxpack add vfpstretch
+foxpack restore
 ```
 
 Then, from this folder:

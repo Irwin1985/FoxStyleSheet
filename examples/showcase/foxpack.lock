@@ -1,0 +1,25 @@
+{
+  "lockVersion": 1,
+  "libraries": [
+    {
+      "name": "foxstylesheet",
+      "repo": "Irwin1985/FoxStyleSheet",
+      "version": "2.2.0",
+      "commit": "920f4e21274a73d381ed7fe3a37031ad195b98cb",
+      "files": [
+        { "path": "foxstylesheet.prg", "sha256": "6c89e76a894359fcb7b73373db0ba0ae6d4b7d5b0b8fb23ff1e136240d36ba58" },
+        { "path": "README.md", "sha256": "000291725ae4ce37aad3b4efc33962aff5ad59d5c9654d95fe48bf8e57b2e402" }
+      ]
+    },
+    {
+      "name": "vfpstretch",
+      "repo": "Irwin1985/VFPStretch",
+      "version": "2.1.0",
+      "commit": "0f396469dfce165b687547d0c5dfe7d0eda4a61d",
+      "files": [
+        { "path": "vfpstretch.prg", "sha256": "2deb9f6136706e16934478d58f20fe027a2be769b52118d1a577384046f9e95b" },
+        { "path": "README.md", "sha256": "101db1d176366d72fbc81ac359eae4f8b59963e5c7d169fb475730a2b4f8315a" }
+      ]
+    }
+  ]
+}
