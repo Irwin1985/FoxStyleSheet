@@ -20,6 +20,16 @@
         { "path": "vfpstretch.prg", "sha256": "2deb9f6136706e16934478d58f20fe027a2be769b52118d1a577384046f9e95b" },
         { "path": "README.md", "sha256": "101db1d176366d72fbc81ac359eae4f8b59963e5c7d169fb475730a2b4f8315a" }
       ]
+    },
+    {
+      "name": "getdirpro",
+      "repo": "Irwin1985/GetDirPro",
+      "version": "2.0.0",
+      "commit": "4214b7b20dbd288d82a2830982c93d87b1b62643",
+      "files": [
+        { "path": "getdirpro.prg", "sha256": "1a83ccddf336a597a698c33eb737d75fa3feab366ccb0ce7bbe771d7cade3f58" },
+        { "path": "README.md", "sha256": "a53ad4aa0156cf954caf277bfd561c438ad314e0382634dde8019939dae488ae" }
+      ]
     }
   ]
 }

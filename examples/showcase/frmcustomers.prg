@@ -52,8 +52,9 @@ Define Class frmCustomers As Form
 		Set Safety Off
 		Set Deleted On
 		Set Century On
-		Create Cursor customer (code C(6), name C(40), email C(50), country C(20), credit N(10,2), active L, kind N(1), notes M)
+		Create Cursor customer (code C(6), name C(40), email C(50), country C(20), credit N(10,2), active L, kind N(1), folder C(200), notes M)
 		Insert Into customer Values ("C00042", "Müller & Söhne GmbH", "einkauf@mueller-soehne.example", "Germany", 25000, .T., 1, ;
+			Addbs(Getenv("USERPROFILE")) + "Documents\", ;
 			"Pays at 30 days. Prefers deliveries on Tuesday mornings." + Chr(13) + "Contact: Frau Jäger.")
 
 		Create Cursor orders (number C(8), ordered D, product C(30), qty N(5), amount N(10,2), status C(10))
@@ -164,6 +165,9 @@ Define Class frmCustomers As Form
 			.AddObject("cntSummary", "Container")
 			.AddObject("lstTags", "ListBox")
 			.AddObject("lblTags", "Label")
+			.AddObject("lblFolder", "Label")
+			.AddObject("txtFolder", "TextBox")
+			.AddObject("cmdFolder", "CommandButton")
 		Endwith
 		With This.pgfMain.Page1
 			This.PlaceLabel(.lblCode, "Code", 24)
@@ -241,6 +245,19 @@ Define Class frmCustomers As Form
 				.Visible = .T.
 				.SetAll("Visible", .T.)
 			Endwith
+			* the folder of the documents: GetDirPro, with the theme of this screen
+			This.PlaceLabel(.lblFolder, "Documents", 284)
+			This.PlaceBox(.txtFolder, "customer.folder", 280, 246)
+			With .cmdFolder
+				.Caption = "..."
+				.ToolTipText = "Choose the folder (GetDirPro)"
+				.Left = 372
+				.Top = 280
+				.Width = 48
+				.Height = 26
+				.Visible = .T.
+			Endwith
+			=Bindevent(.cmdFolder, "Click", This, "ChooseFolder")
 			This.PlaceLabel(.lblTags, "Tags", 184)
 			.lblTags.Left = 450
 			With .lstTags
@@ -331,6 +348,23 @@ Define Class frmCustomers As Form
 		toLabel.Left = 14
 		toLabel.Top = m.tnTop
 		toLabel.AutoSize = .T.
+	Endproc
+
+	*--------------------------------------------------------------------------
+	* The folder picker takes the theme this screen has now
+	*--------------------------------------------------------------------------
+	Procedure ChooseFolder
+		Local loDir, loFss, lcFolder
+		loDir = Createobject("GetDirPro")
+		loFss = FssEngineOf(This)
+		If !Isnull(m.loFss)
+			loDir.cTheme = m.loFss.cTheme
+		Endif
+		lcFolder = loDir.GetDir(Alltrim(customer.folder), "Where are the documents of this customer?")
+		If !Empty(m.lcFolder)
+			Replace folder With m.lcFolder In customer
+			This.pgfMain.Page1.txtFolder.Refresh()
+		Endif
 	Endproc
 
 	Procedure cmdSave.Click

@@ -10,10 +10,12 @@ no colours: change the theme and the same screen looks different.
   built-in theme.
 - On Windows 10 and 11 the title bar follows the theme.
 - Drag the border, or maximize: every control, font, grid and list follows.
+- The **...** button beside *Documents* opens [GetDirPro](https://github.com/Irwin1985/GetDirPro),
+  a folder picker that takes the theme the screen has at that moment.
 
 ## Run it
 
-The two libraries come with FoxPack: `foxpack.lock` fixes their versions, and this puts
+The three libraries come with FoxPack: `foxpack.lock` fixes their versions, and this puts
 them in `lib\`:
 
 ```
@@ -32,6 +34,6 @@ or build `showcase.pjx` as an EXE and run `showcase.exe`.
 
 | File | What it shows |
 |---|---|
-| `main.prg` | Loads the two libraries and creates `_Screen.oVfpStretch`, once for the whole application |
-| `frmcustomers.prg` | The screen. `Init` links the theme first and then calls VFPStretch; `ApplyTheme()` and `OnThemeChanged()` switch it and save the choice in `%APPDATA%\FoxShowcase\theme.txt` |
+| `main.prg` | Loads the three libraries and creates `_Screen.oVfpStretch`, once for the whole application |
+| `frmcustomers.prg` | The screen. `Init` links the theme first and then calls VFPStretch; `ApplyTheme()` and `OnThemeChanged()` switch it and save the choice in `%APPDATA%\FoxShowcase\theme.txt`; `ChooseFolder()` opens GetDirPro with the same theme |
 | `config.fpw` | `SCREEN=OFF`: as an EXE the form is the whole application |

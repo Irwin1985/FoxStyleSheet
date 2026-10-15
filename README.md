@@ -63,8 +63,9 @@ button shows a sun with the light theme and a moon with the dark one, and a clic
 form to the other. On a top-level form (`ShowWindow = 2`) the title bar follows the theme too.
 
 `examples\showcase` is a complete application with one screen: the two themes, the button, a
-combo with every built-in theme, the choice of the user saved between runs, and
-[VFPStretch](https://github.com/Irwin1985/VFPStretch) to stretch it with the window.
+combo with every built-in theme, the choice of the user saved between runs,
+[VFPStretch](https://github.com/Irwin1985/VFPStretch) to stretch it with the window, and
+[GetDirPro](https://github.com/Irwin1985/GetDirPro), a folder picker in the same theme.
 
 ### A theme of your own, in a file or in a string
 

@@ -1,7 +1,8 @@
 *==============================================================================
 * FoxStyleSheet + VFPStretch showcase
 * One screen that takes a theme (light or dark, as Windows is, and a sun or
-* moon button to switch) and stretches with its window.
+* moon button to switch), stretches with its window, and opens a folder
+* picker (GetDirPro) in the same theme.
 *
 *   foxpack restore           <- puts the two libraries in lib\
 *   DO main.prg               <- from the IDE
@@ -23,7 +24,7 @@ If _vfp.StartMode > 0
 	_Screen.Visible = .F.
 Endif
 
-Set Procedure To lib\foxstylesheet\foxstylesheet.prg, lib\vfpstretch\vfpstretch.prg, frmcustomers.prg Additive
+Set Procedure To lib\foxstylesheet\foxstylesheet.prg, lib\vfpstretch\vfpstretch.prg, lib\getdirpro\getdirpro.prg, frmcustomers.prg Additive
 
 If Type("_Screen.oVfpStretch") != "O"
 	=Addproperty(_Screen, "oVfpStretch", Createobject("vfpStretch"))
